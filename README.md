@@ -67,6 +67,8 @@ vim config/targets.yaml   # 填靶机 IP / 账号
 | WAF 部署 | `ops waf deploy -t @defense` | 旁路读访问日志，默认只监听不动流量 |
 | 攻击审计 | `ops waf audit --to-vuln` | 拉命中记录，可直接进漏洞库 |
 | 加固封禁 | `ops waf enforce --rule sqli,cmdi` | SIGHUP 热加载，命中即封禁源 IP |
+| 封禁 IP | `ops waf ban <ip> -t web-01` | 无 root 自动降级 PHP 403 / .htaccess |
+| 按洞修补 | `ops harden plan -t @defense [--apply]` | 从发现生成修补动作，只自动做安全的 |
 | 漏洞重放 | `ops vuln replay --all -t @attack` | 把抓到的攻击请求打到对手靶机 |
 | AI 写插件 | `ops ai plugin "CVE-2021-41773 ..."` | 生成 → 校验 → 草稿 → 人工启用 |
 | 出报告 | `ops report` | Markdown + HTML，含 flag 提交表 |
@@ -668,6 +670,60 @@ curl -s -X POST localhost:8899/api/findings/restore \
 确认后点「保存并启用」才移进正式目录，之后和手写插件完全一样可批量跑。
 
 Web 端在「利用」页底部的「AI 写插件」面板；漏洞库每行也有「AI 插件」按钮，可直接带上下文生成。
+
+## 封禁：没有 root 也能做，且绝不假装成功
+
+早期版本是 agent 在自己进程里跑 `iptables -I INPUT -s <ip> -j DROP`。问题很现实：
+**站点一般只有 www-data / 普通用户权限，iptables 会直接 permission denied**，
+而旧代码把失败静默吞掉，界面上只看到"已加固"却没封住任何人。
+
+现在封禁是"能力自适应"的，先探测再决定用哪条路：
+
+| 后端 | 前提 | 拦什么 |
+| --- | --- | --- |
+| `iptables` | root 或免密 sudo（规则带 `ctf-ops-ban` 注释） | 该 IP 的所有流量 |
+| `php403` | 站点部署了 watchbird.php（PHP 站点） | 该 IP 的 PHP 请求，**不需要任何系统权限** |
+| `htaccess` | Apache + `AllowOverride All` + 站点目录可写 | 该 IP 访问该站点 |
+| 无 | 以上都不满足 | 明确告知"只能靠 WAF 规则拦 payload" |
+
+```bash
+ops waf caps  -t web-01          # 这台能怎么封
+ops waf ban 45.13.22.101 -t web-01 --backend auto
+ops waf bans -t web-01           # 现在封了谁
+ops waf unban -t web-01          # 只删带标记的规则，不动宿主防火墙
+```
+
+**解封不再 `iptables -F INPUT`**（那会把平台/系统规则一起清空）。现在按 `ctf-ops-ban`
+注释精确删除自己加的规则，PHP 黑名单则清空 `bans.txt`。
+
+## 防护不能只靠 WAF：按扫出来的洞修补
+
+WAF 拦的是 payload，洞还在。`ops harden` 把"发现"翻译成"修补动作"，每个动作都标清
+影响面、是否需要 root、能不能自动执行：
+
+| 发现 | 修补动作 | 层面 | 自动 |
+| --- | --- | --- | --- |
+| `.git/.env/备份包可下载` | 站点内写 `.htaccess` 拒绝（或给 nginx 片段） | app | 免 root 可自动 |
+| 上传点 + 上传目录可执行 | `uploads/.htaccess` 禁 PHP 执行 | app | 免 root 可自动 |
+| 目录扫描 / `Index of /` | `Options -Indexes` | app | 免 root 可自动 |
+| phpmyadmin / adminer 暴露 | 404 掉管理入口 | app | 免 root 可自动 |
+| WAF 命中 SQLi/穿越/命令执行 | 切 WAF 加固模式（拦 payload） | app | 可自动 |
+| Redis 未授权 | requirepass + `bind 127.0.0.1` | service | 人工（需 root） |
+| MySQL 对外 + 弱口令 | `bind-address=127.0.0.1` + 改口令 | service | 人工（需 root） |
+| SSH 爆破 | 禁 root 直登 / 改密钥认证 | system | 人工（可能把自己锁外面） |
+| CVE / 版本类 | 出升级命令与注意事项 | system | 人工（升级要备份） |
+
+```bash
+ops harden plan -t @defense          # 只出方案：report/harden_<时间>.md
+ops harden plan -t @defense --apply  # 生成后执行"免 root 且安全"的那部分
+```
+
+页面「防护 → 漏洞修补」可勾选逐条应用，还有「只做免 root 的」一键执行安全项；
+每条改动都带 `# >>> ctf-ops harden` 标记，可精确回滚，不做全文覆盖。
+
+**安全边界**（刻意的取舍）：自动写入只允许落在站点目录内的局部文件
+（`.htaccess` / `uploads/.htaccess`），系统级配置（nginx.conf、php.ini、sshd_config、
+redis.conf）只输出片段和命令，由人确认——改错一个字符就可能让业务起不来。
 
 ## 写一个 PoC 插件
 

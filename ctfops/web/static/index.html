@@ -478,6 +478,39 @@
           <div class="panel-body tight" id="wafStatus"><div class="empty">尚未部署</div></div>
         </div>
 
+        <div class="panel collapsible" data-collapse="waf-ban">
+          <div class="panel-head"><h2>IP 封禁</h2><div class="row tight">
+            <span class="muted sm" id="banCaps">—</span>
+            <button class="btn ghost sm" id="btnBanCaps">探测能力</button>
+            <button class="btn ghost sm" id="btnBanList">当前封禁</button>
+            <button class="icon-btn fold" data-fold title="折叠 / 展开">⌃</button>
+          </div></div>
+          <div class="panel-body">
+            <div class="field"><span class="label">防守靶机</span><div class="chips" id="banTargets"></div></div>
+            <div class="row">
+              <label class="inline flex1">IP 列表（逗号/空格分隔）
+                <input id="banIps" placeholder="45.13.22.101, 45.13.22.102">
+              </label>
+              <label class="inline">方式
+                <select id="banBackend" class="mini wide">
+                  <option value="auto">自动（按权限降级）</option>
+                  <option value="iptables">iptables（需 root/sudo）</option>
+                  <option value="php403">PHP 传感器 403（免 root）</option>
+                  <option value="htaccess">Apache .htaccess（免 root）</option>
+                </select>
+              </label>
+              <button class="btn" id="btnBan">封禁</button>
+              <button class="btn ghost" id="btnUnban">解封</button>
+            </div>
+            <p class="muted sm">
+              普通用户动不了防火墙时自动降级：<b>PHP 传感器在请求内 403</b>（watchbird 的 bans.txt）、
+              Apache 站点写 <b>.htaccess</b>；两者都不可用会明确告知"只能靠 WAF 规则拦 payload"。
+              iptables 规则带 <code>ctf-ops-ban</code> 标记，解封只删这些，不会清空整条链。
+            </p>
+            <div class="table-wrap hidden" id="banResult"></div>
+          </div>
+        </div>
+
         <div class="panel">
           <div class="panel-head"><h2>攻击审计</h2><div class="row tight">
             <span class="muted sm" id="wafAuditHint"></span>
@@ -486,6 +519,21 @@
             <button class="btn sm" id="btnWafToVuln">加入漏洞库</button>
           </div></div>
           <div class="panel-body tight" id="wafAudit"><div class="empty">点「拉取审计」，从防守靶机取最近的攻击命中记录</div></div>
+        </div>
+
+
+        <div class="panel collapsible" data-collapse="harden">
+          <div class="panel-head"><h2>漏洞修补</h2><div class="row tight">
+            <span class="muted sm" id="hardenHint"></span>
+            <button class="btn ghost sm" id="btnHardenPlan">生成修补方案</button>
+            <button class="btn ghost sm" id="btnHardenSafe">只做免 root 的</button>
+            <button class="btn sm" id="btnHardenApply">应用选中</button>
+            <button class="icon-btn fold" data-fold title="折叠 / 展开">⌃</button>
+          </div></div>
+          <div class="panel-body tight">
+            <div class="list-bar" id="hardenBar"></div>
+            <div id="hardenTable"><div class="empty">点「生成修补方案」：按发现改配置，不只是拦 payload</div></div>
+          </div>
         </div>
 
         <div class="panel">

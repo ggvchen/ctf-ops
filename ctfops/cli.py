@@ -1389,6 +1389,115 @@ def waf_stop_cmd(target: List[str] = typer.Option(["@defense"], "--target", "-t"
         ok(f"{t.name}: 已停止")
 
 
+@waf_app.command("ban")
+def waf_ban_cmd(
+    ips: List[str] = typer.Argument(..., help="要封的 IP，可多个"),
+    target: List[str] = typer.Option(["@defense"], "--target", "-t"),
+    backend: str = typer.Option("auto", "--backend",
+                                help="auto / iptables / php403 / htaccess"),
+):
+    """封禁 IP：按靶机权限自动选 iptables / PHP 403 / .htaccess。"""
+    from .waf import ban
+    cfg, ts = _targets(target)
+    for t in ts:
+        r = ban(cfg, t, ips, backend=backend)
+        if r.get("error"):
+            warn(f"{t.name}: {r['error']}")
+        (ok if r.get("ok") else warn)(
+            f"{t.name}: 方式 {r.get('backend') or '-'}，成功 {len(r.get('banned') or [])}，"
+            f"失败 {len(r.get('failed') or [])}")
+        for d in r.get("detail") or []:
+            console.print(f"  [dim]{d}[/dim]")
+
+
+@waf_app.command("unban")
+def waf_unban_cmd(
+    ips: Optional[List[str]] = typer.Argument(None, help="留空则清掉本工具加的全部"),
+    target: List[str] = typer.Option(["@defense"], "--target", "-t"),
+):
+    """解封：只删带 ctf-ops-ban 标记的规则，不动其它防火墙策略。"""
+    from .waf import unban
+    cfg, ts = _targets(target)
+    for t in ts:
+        r = unban(cfg, t, ips or None)
+        (ok if r.get("ok") else warn)(
+            f"{t.name}: 解封 {len(r.get('removed') or [])} 个"
+            + (f"（{'；'.join(r['detail'])}）" if r.get("detail") else ""))
+
+
+@waf_app.command("bans")
+def waf_bans_cmd(target: List[str] = typer.Option(["@defense"], "--target", "-t")):
+    """看现在封了谁（iptables 标记 + PHP 黑名单）。"""
+    from .waf import list_bans
+    cfg, ts = _targets(target)
+    for t in ts:
+        r = list_bans(cfg, t)
+        console.print(f"[bold]{t.name}[/bold] 共 {len(r.get('bans') or [])} 个")
+        for ip in r.get("bans") or []:
+            console.print(f"  - {ip}")
+
+
+@waf_app.command("caps")
+def waf_caps_cmd(target: List[str] = typer.Option(["@defense"], "--target", "-t")):
+    """探测靶机能用哪种封禁方式（普通用户通常只能走应用层）。"""
+    from .waf import detect_ban_caps
+    cfg, ts = _targets(target)
+    for t in ts:
+        c = detect_ban_caps(cfg, t)
+        console.print(f"[bold]{t.name}[/bold] uid={c.uid} root={c.root} sudo={c.sudo} "
+                      f"iptables={c.iptables} php={c.php_agent} "
+                      f"web={c.web_server or '-'} htaccess={c.allow_override} "
+                      f"→ 推荐 [cyan]{c.best() or '无（只能靠 WAF 规则拦 payload）'}[/cyan]")
+
+
+# --------------------------------------------------------------------- 漏洞修补
+harden_app = typer.Typer(help="漏洞修补：按扫出来的发现生成并应用修复动作。",
+                         no_args_is_help=True)
+app.add_typer(harden_app, name="harden")
+
+
+@harden_app.command("plan")
+def harden_plan_cmd(
+    target: List[str] = typer.Option(["@defense"], "--target", "-t"),
+    apply_: bool = typer.Option(False, "--apply", help="生成后立刻执行免 root 的动作"),
+    yes: bool = typer.Option(False, "--yes", "-y"),
+):
+    """从发现/漏洞库生成修补方案（附命令与配置片段）。"""
+    from . import harden as harden_mod
+    from .waf import detect_ban_caps
+    from .util import pmap
+    cfg, ts = _targets(target)
+    store = get_store()
+    caps = {name: c.to_dict() for name, c in
+            [(t.name, detect_ban_caps(cfg, t)) for t in ts]}
+    acts = harden_mod.plan(cfg, store, ts, caps,
+                           log=lambda m, l="info": console.print(f"[dim]{m}[/dim]"))
+    if not acts:
+        warn("没有需要修补的发现（先跑扫描/查杀）")
+        return
+    md = harden_mod.write_plan_md(cfg, acts)
+    store.set_setting("harden.last", json.dumps(
+        {"ts": time.strftime("%Y-%m-%dT%H:%M:%S"), "caps": caps,
+         "actions": [a.to_dict() for a in acts]}, ensure_ascii=False))
+    ok(f"生成 {len(acts)} 个动作，方案：{md}")
+    for a in acts:
+        tag = "自动" if a.auto else "人工"
+        console.print(f"[{a.severity}] {a.target} · {a.title} （{a.level} / {tag}"
+                      f"{' / 需 root' if a.needs_root else ''}）")
+    if not apply_:
+        return
+    if not yes and not typer.confirm("直接应用免 root 的自动动作？", default=False):
+        return
+    for t in ts:
+        mine = [a for a in acts if a.target == t.name]
+        if not mine:
+            continue
+        for row in harden_mod.apply(cfg, store, t, mine, caps.get(t.name),
+                                    log=lambda m, l="info": console.print(f"  {m}")):
+            (ok if row.get("ok") else warn)(
+                f"{t.name}: {row['title']} → {row['status']} {row['detail'][:100]}")
+
+
 # --------------------------------------------------------------------- 漏洞库
 vuln_app = typer.Typer(help="漏洞库：WAF 命中的可复现请求，可用于加固与重放。", no_args_is_help=True)
 app.add_typer(vuln_app, name="vuln")

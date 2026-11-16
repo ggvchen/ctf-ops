@@ -2012,6 +2012,175 @@ def waf_deploy(app, p, q, b):
     return 202, _job_reply(app.jobs.submit("waf", f"部署 WAF · {len(defense)} 台", work))
 
 
+@route("GET", r"/api/waf/ban/caps")
+def waf_ban_caps(app, p, q, b):
+    """这台靶机到底能怎么封：root? sudo? PHP 传感器? Apache 允许 .htaccess?"""
+    from ..waf import detect_ban_caps
+    name = (q.get("target") or "").strip()
+    if not name:
+        raise ValueError("target 必填")
+    t = app.cfg.target(name)
+    if t.is_attack:
+        raise ValueError("只能对防守靶机封禁")
+    caps = detect_ban_caps(app.cfg, t)
+    return 200, {"target": t.name, "caps": caps.to_dict()}
+
+
+@route("GET", r"/api/waf/bans")
+def waf_bans(app, p, q, b):
+    from ..waf import list_bans
+    name = (q.get("target") or "").strip()
+    if not name:
+        raise ValueError("target 必填")
+    t = app.cfg.target(name)
+    return 200, {"target": t.name, **list_bans(app.cfg, t)}
+
+
+@route("POST", r"/api/waf/ban")
+def waf_ban(app, p, q, b):
+    """封禁一批 IP。后端按权限自适应：iptables > php403 > htaccess。"""
+    from ..waf import ban
+    name = (b.get("target") or "").strip()
+    if not name:
+        raise ValueError("target 必填")
+    ips = b.get("ips") or []
+    if isinstance(ips, str):
+        ips = re.split(r"[\s,;]+", ips)
+    if not ips:
+        raise ValueError("ips 必填")
+    t = app.cfg.target(name)
+    if t.is_attack:
+        raise ValueError("只能对防守靶机封禁")
+
+    def work(job):
+        job.log(f"[{t.name}] 封禁 {len(ips)} 个 IP ...")
+        r = ban(app.cfg, t, ips, backend=(b.get("backend") or "auto"))
+        if r.get("error"):
+            job.log(f"[{t.name}] {r['error']}", "warn")
+        job.log(f"[{t.name}] 方式 {r.get('backend') or '-'}，成功 {len(r.get('banned') or [])}，"
+                f"失败 {len(r.get('failed') or [])}",
+                "ok" if r.get("ok") else "warn")
+        for d in (r.get("detail") or [])[:10]:
+            job.log(f"  {d}")
+        app.store.event("action", target=t.name, title="waf.ban",
+                        data={"ips": ips, "backend": r.get("backend"),
+                              "banned": r.get("banned"), "failed": r.get("failed")})
+        return r
+    return 202, _job_reply(app.jobs.submit("waf", f"封禁 · {t.name}", work))
+
+
+@route("POST", r"/api/waf/unban")
+def waf_unban(app, p, q, b):
+    from ..waf import unban
+    name = (b.get("target") or "").strip()
+    if not name:
+        raise ValueError("target 必填")
+    ips = b.get("ips") or []
+    if isinstance(ips, str):
+        ips = re.split(r"[\s,;]+", ips)
+    t = app.cfg.target(name)
+
+    def work(job):
+        r = unban(app.cfg, t, ips or None)
+        job.log(f"[{t.name}] 解封 {len(r.get('removed') or [])} 个 IP"
+                f"{('：' + '；'.join(r.get('detail') or [])) if r.get('detail') else ''}",
+                "ok" if r.get("ok") else "warn")
+        return r
+    return 202, _job_reply(app.jobs.submit("waf", f"解封 · {t.name}", work))
+
+
+# ------------------------------------------------------- 漏洞修补（按发现修）
+@route("POST", r"/api/harden/plan")
+def harden_plan(app, p, q, b):
+    """从发现/漏洞库生成修补计划；顺带探测每台靶机的执行能力。"""
+    from .. import harden as harden_mod
+    names = b.get("targets")
+    ts = _resolve(app, names) if names else app.cfg.resolve_role("defense")
+    defense = [t for t in ts if not t.is_attack]
+    if not defense:
+        raise ValueError("没有防守靶机")
+
+    def work(job):
+        from ..util import pmap
+        from ..waf import detect_ban_caps
+        job.log(f"为 {len(defense)} 台靶机生成修补方案 ...")
+        caps: Dict[str, Any] = {}
+        probe = pmap(lambda t: (t.name, detect_ban_caps(app.cfg, t).to_dict()), defense,
+                     workers=min(6, max(1, len(defense))))
+        for item in probe:
+            if isinstance(item, tuple):
+                caps[item[0]] = item[1]
+                c = item[1]
+                job.log(f"[{item[0]}] uid={c.get('uid')} sudo={c.get('sudo')} "
+                        f"web={c.get('web_server') or '-'} htaccess={c.get('allow_override')} "
+                        f"→ 可封禁方式 {c.get('best') or '无'}")
+        acts = harden_mod.plan(app.cfg, app.store, defense, caps, log=job.log)
+        md = harden_mod.write_plan_md(app.cfg, acts)
+        payload = [a.to_dict() for a in acts]
+        app.store.set_setting("harden.last", json.dumps(
+            {"ts": iso_now(), "caps": caps, "actions": payload,
+             "md": pathlib.Path(md).name}, ensure_ascii=False))
+        job.log(f"生成 {len(acts)} 个修补动作，报告 {pathlib.Path(md).name}", "ok")
+        return {"actions": payload, "caps": caps, "report": pathlib.Path(md).name}
+    return 202, _job_reply(app.jobs.submit("waf", "漏洞修补方案", work))
+
+
+@route("GET", r"/api/harden/last")
+def harden_last(app, p, q, b):
+    raw = app.store.get_setting("harden.last", "")
+    try:
+        data = json.loads(raw) if raw else {}
+    except json.JSONDecodeError:
+        data = {}
+    return 200, data
+
+
+@route("POST", r"/api/harden/apply")
+def harden_apply(app, p, q, b):
+    """应用选中的修补动作（只对免 root 的自动落地，其余明确回报）。"""
+    from .. import harden as harden_mod
+    ids = b.get("ids") or []
+    if isinstance(ids, str):
+        ids = [ids]
+    dry_run = bool(b.get("dry_run"))
+    raw = app.store.get_setting("harden.last", "")
+    if not raw:
+        raise ValueError("还没有生成过修补方案")
+    saved = json.loads(raw)
+    picked = [a for a in saved.get("actions", []) if not ids or a["id"] in set(ids)]
+    if not picked:
+        raise ValueError("没有匹配的动作")
+
+    def work(job):
+        rows: List[Dict[str, Any]] = []
+        by_target: Dict[str, List[Dict[str, Any]]] = {}
+        for a in picked:
+            by_target.setdefault(a["target"], []).append(a)
+        for tname, items in by_target.items():
+            try:
+                t = app.cfg.target(tname)
+            except KeyError:
+                job.log(f"靶机不存在：{tname}", "warn")
+                continue
+            acts = [harden_mod.Action(
+                id=a["id"], target=a["target"], title=a["title"],
+                severity=a.get("severity", "medium"), level=a.get("level", "app"),
+                reason=a.get("reason", ""), needs_root=a.get("needs_root", False),
+                auto=a.get("auto", True),
+                files=[(f["path"], f["content"]) for f in a.get("files") or []],
+                cmds=a.get("cmds") or [], rollback=a.get("rollback") or [],
+                evidence=a.get("evidence", "")) for a in items]
+            caps = (saved.get("caps") or {}).get(tname) or {}
+            job.log(f"[{tname}] 应用 {len(acts)} 个动作（dry_run={dry_run}）")
+            for row in harden_mod.apply(app.cfg, app.store, t, acts, caps,
+                                        dry_run=dry_run, log=job.log):
+                job.log(f"[{tname}] {row['title']}: {row['status']} {row['detail'][:120]}",
+                        "ok" if row.get("ok") else "warn")
+                rows.append(row)
+        return {"results": rows, "ok": sum(1 for r in rows if r.get("ok"))}
+    return 202, _job_reply(app.jobs.submit("waf", "应用修补动作", work))
+
+
 @route("POST", r"/api/waf/audit")
 def waf_audit(app, p, q, b):
     names = b.get("targets")

@@ -24,6 +24,8 @@ from .sshx import SSHSession
 from .util import console, trunc, warn
 
 WAF_HOME = "/tmp/ctfops-waf"
+# 封禁规则带 comment，撤销时只删自己加的，绝不 -F INPUT（那会把平台规则一起清掉）
+BAN_CMD_DEFAULT = "iptables -I INPUT -s {ip} -j DROP -m comment --comment ctf-ops-ban"
 AGENT_PHP = (pathlib.Path(__file__).parent / "agents" / "watchbird.php").read_text(encoding="utf-8")
 GO_BIN_DIR = pathlib.Path(__file__).parent / "agents" / "bin"
 PHP_AGENT_PATH = f"{WAF_HOME}/watchbird.php"
@@ -110,7 +112,7 @@ class Agent:
         self.rules = load_json(os.path.join(self.home, "rules.json"), [])
         self.mode = self.cfg.get("mode", "monitor")
         self.autoban = bool(self.cfg.get("autoban"))
-        self.ban_cmd = self.cfg.get("ban_cmd") or "iptables -I INPUT -s {ip} -j DROP"
+        self.ban_cmd = self.cfg.get("ban_cmd") or BAN_CMD_DEFAULT
         self.logs = self.cfg.get("logs") or []
         self.bans_path = os.path.join(self.home, "bans.txt")
         try:
@@ -466,7 +468,7 @@ def _deploy_python(sess: SSHSession, target: Target, logs: Optional[List[str]],
     if not sess.write_file(f"{WAF_HOME}/agent.py", AGENT_SRC, perm=0o700):
         return {"ok": False, "error": "上传 agent 失败"}
     conf = {"mode": mode, "autoban": bool(autoban and mode == "enforce"),
-            "ban_cmd": "iptables -I INPUT -s {ip} -j DROP", "logs": logs}
+            "ban_cmd": BAN_CMD_DEFAULT, "logs": logs}
     sess.write_file(f"{WAF_HOME}/config.json", json.dumps(conf, ensure_ascii=False, indent=1))
 
     sess.exec("pkill -f 'ctfops-waf/agent.py' 2>/dev/null; sleep 0.3; true", timeout=15)
@@ -497,7 +499,7 @@ def _deploy_go(sess: SSHSession, target: Target, binary: pathlib.Path,
     sess.exec(f"chmod 755 {remote}", timeout=10)
 
     conf = {"mode": mode, "autoban": bool(autoban and mode == "enforce"),
-            "ban_cmd": "iptables -I INPUT -s {ip} -j DROP", "logs": logs}
+            "ban_cmd": BAN_CMD_DEFAULT, "logs": logs}
     sess.write_file(f"{WAF_HOME}/config.json", json.dumps(conf, ensure_ascii=False, indent=1))
 
     sess.exec("pkill -f 'ctfops-waf/waf-go' 2>/dev/null; sleep 0.3; true", timeout=15)
@@ -742,10 +744,256 @@ def stop(cfg: Config, target: Target, unban: bool = False) -> Dict[str, Any]:
                   f"pkill -f 'ctfops-waf/waf-go' 2>/dev/null; "
                   f"rm -f {WAF_HOME}/agent.pid {WAF_HOME}/waf-go", timeout=15)
         if unban:
-            sess.exec("iptables -F INPUT 2>/dev/null; true", timeout=15)
+            # 只删带 ctf-ops-ban 标记的规则；iptables -F INPUT 会把宿主/平台的规则一起清空
+            sess.exec("iptables -S INPUT 2>/dev/null | grep -F 'ctf-ops-ban' "
+                      "| sed 's/^-A/-D/' | sh 2>/dev/null; true", timeout=20)
+            sess.exec(f"rm -f {WAF_HOME}/bans.txt", timeout=10)
         sess.exec(f"rm -f {DEPLOYED_PATH} {WAF_HOME}/status.json {WAF_HOME}/php_status.json",
                   timeout=10)
         return {"ok": True, "engine": engine}
+
+
+# --------------------------------------------------------------- 封禁后端
+# 现实里大多数站只有普通用户权限，iptables 根本动不了。所以封禁做成"能力自适应"：
+#   iptables（root/sudo）> php403（watchbird 在请求内拒绝）> htaccess（Apache 局部文件）
+# 每条路径都会明确回报用了哪种、为什么失败，绝不静默。
+BAN_MARK = "# >>> ctf-ops ban (auto) >>>"
+BAN_MARK_END = "# <<< ctf-ops ban <<<"
+
+
+@dataclass
+class BanCaps:
+    uid: int = -1
+    root: bool = False
+    sudo: bool = False
+    iptables: bool = False
+    nft: bool = False
+    php_agent: bool = False
+    web_server: str = ""
+    webroot: str = ""
+    webroot_writable: bool = False
+    allow_override: bool = False
+    backlog: str = ""
+
+    def best(self) -> str:
+        if self.iptables and (self.root or self.sudo):
+            return "iptables"
+        if self.php_agent:
+            return "php403"
+        if self.allow_override and self.webroot_writable:
+            return "htaccess"
+        return ""
+
+    def to_dict(self) -> Dict[str, Any]:
+        d = {k: v for k, v in self.__dict__.items()}
+        d["best"] = self.best()
+        return d
+
+
+def detect_ban_caps(cfg: Config, target: Target, sess: Optional[SSHSession] = None) -> BanCaps:
+    """一次 SSH 摸清"能怎么封"：uid、sudo、iptables、PHP 传感器、Apache 是否允许 .htaccess。"""
+    own = sess is None
+    caps = BanCaps()
+    try:
+        sess = sess or SSHSession(target, cfg)
+        if own:
+            sess.__enter__()
+        script = (
+            'echo "UID=$(id -u)"\n'
+            'sudo -n true 2>/dev/null && echo SUDO=1 || echo SUDO=0\n'
+            'command -v iptables >/dev/null 2>&1 && echo IPT=1\n'
+            'command -v nft >/dev/null 2>&1 && echo NFT=1\n'
+            f'[ -f {PHP_AGENT_PATH} ] && echo PHPAGENT=1\n'
+            "ps -eo comm= 2>/dev/null | grep -E '^(nginx|apache2|httpd)$' | head -1 "
+            "| sed 's/^/SRV=/'\n"
+            'for w in "$WEBROOT"; do [ -n "$w" ] && [ -w "$w" ] && echo WEBROOT_W=1; done\n'
+            'grep -rls "AllowOverride[[:space:]]*All" /etc/apache2 /etc/httpd 2>/dev/null '
+            '| head -1 | sed "s/^/OVERRIDE=/"\n'
+        )
+        webroot = (target.webroot or "").strip()
+        if not webroot:
+            try:
+                webroot = json.loads(sess.read_file(DEPLOYED_PATH) or "{}").get("webroot", "")
+            except Exception:  # noqa: BLE001
+                webroot = ""
+        r = sess.exec(f"export WEBROOT={webroot or ''}; bash -c {_shq(script)}", timeout=25)
+        caps.webroot = webroot
+        caps.backlog = (r.out or "")[:600]
+        for line in (r.out or "").splitlines():
+            line = line.strip()
+            if line.startswith("UID="):
+                try:
+                    caps.uid = int(line[4:])
+                except ValueError:
+                    pass
+            elif line == "SUDO=1":
+                caps.sudo = True
+            elif line == "IPT=1":
+                caps.iptables = True
+            elif line == "NFT=1":
+                caps.nft = True
+            elif line == "PHPAGENT=1":
+                caps.php_agent = True
+            elif line.startswith("SRV="):
+                caps.web_server = line[4:].strip()
+            elif line == "WEBROOT_W=1":
+                caps.webroot_writable = True
+            elif line.startswith("OVERRIDE="):
+                caps.allow_override = True
+        caps.root = caps.uid == 0
+    except Exception as e:  # noqa: BLE001
+        caps.backlog = f"探测失败: {e}"
+    finally:
+        if own and sess is not None:
+            try:
+                sess.close()
+            except Exception:  # noqa: BLE001
+                pass
+    return caps
+
+
+def _shq(s: str) -> str:
+    return "'" + str(s).replace("'", "'\"'\"'") + "'"
+
+
+def _norm_ips(ips) -> List[str]:
+    out = []
+    for ip in ips or []:
+        ip = str(ip).strip()
+        if re.fullmatch(r"\d{1,3}(?:\.\d{1,3}){3}", ip) and ip not in out \
+                and ip not in ("0.0.0.0", "127.0.0.1"):
+            out.append(ip)
+    return out
+
+
+def ban(cfg: Config, target: Target, ips, backend: str = "auto") -> Dict[str, Any]:
+    """按可用能力封禁一批 IP。返回用了哪个后端、成功/失败明细。"""
+    want = _norm_ips(ips)
+    if not want:
+        return {"ok": False, "backend": "", "error": "没有有效的 IPv4 地址",
+                "banned": [], "failed": []}
+    res: Dict[str, Any] = {"ok": False, "backend": "", "banned": [], "failed": [],
+                           "detail": []}
+    try:
+        with SSHSession(target, cfg) as sess:
+            caps = detect_ban_caps(cfg, target, sess)
+            pick = backend if backend not in ("", "auto") else caps.best()
+            res["caps"] = caps.to_dict()
+            if not pick:
+                res["error"] = ("这台机器既没有可用的 iptables/sudo，也没有部署 PHP 传感器、"
+                                "Apache 也不允许 .htaccess —— 只能走 WAF 规则拦截 payload")
+                return res
+            res["backend"] = pick
+
+            if pick == "iptables":
+                prefix = "" if caps.root else "sudo -n "
+                for ip in want:
+                    cmd = (prefix + BAN_CMD_DEFAULT).format(ip=ip)
+                    r = sess.exec(cmd, timeout=15)
+                    if r.rc == 0:
+                        res["banned"].append(ip)
+                    elif not caps.root and target.password:
+                        # sudo -n 失败时用口令走 sudo -S
+                        r2 = sess.exec(BAN_CMD_DEFAULT.format(ip=ip), timeout=20, sudo=True)
+                        (res["banned"] if r2.rc == 0 else res["failed"]).append(ip)
+                        if r2.rc != 0:
+                            res["detail"].append(f"{ip}: {(r2.err or r.err or '')[:120]}")
+                    else:
+                        res["failed"].append(ip)
+                        res["detail"].append(f"{ip}: {(r.err or r.out or '')[:120]}")
+
+            elif pick == "php403":
+                cur = (sess.read_file(f"{WAF_HOME}/bans.txt") or "").split()
+                merged = list(dict.fromkeys(cur + want))
+                sess.exec(f"mkdir -p {WAF_HOME}; chmod 777 {WAF_HOME} 2>/dev/null; true",
+                          timeout=10)
+                okw = sess.write_file(f"{WAF_HOME}/bans.txt", "\n".join(merged) + "\n", perm=0o666)
+                if okw:
+                    sess.exec(f"chmod 666 {WAF_HOME}/bans.txt 2>/dev/null; true", timeout=10)
+                    res["banned"] = want
+                else:
+                    res["failed"] = want
+                    res["detail"].append("bans.txt 写不进去（目录权限？）")
+
+            elif pick == "htaccess":
+                path = posixpath.join(caps.webroot.rstrip("/"), ".htaccess")
+                old = sess.read_file(path) or ""
+                keep = re.sub(BAN_MARK + r".*?" + BAN_MARK_END + r"\n?", "", old, flags=re.S)
+                lines = [ln for ln in keep.splitlines()]
+                block = [BAN_MARK] + [f"Require not ip {ip}" for ip in want] + [BAN_MARK_END]
+                body = "\n".join(lines + block).strip("\n") + "\n"
+                if sess.write_file(path, body):
+                    res["banned"] = want
+                else:
+                    res["failed"] = want
+                    res["detail"].append(".htaccess 写入失败")
+
+            res["ok"] = bool(res["banned"]) and not res["failed"]
+            if res["failed"]:
+                res["error"] = f"{len(res['failed'])} 个 IP 封禁失败"
+    except Exception as e:  # noqa: BLE001
+        res["error"] = str(e)
+    return res
+
+
+def unban(cfg: Config, target: Target, ips=None) -> Dict[str, Any]:
+    """只撤销我们加的封禁，绝不整链清空。"""
+    res: Dict[str, Any] = {"ok": True, "removed": [], "detail": []}
+    try:
+        with SSHSession(target, cfg) as sess:
+            caps = detect_ban_caps(cfg, target, sess)
+            targets = _norm_ips(ips) if ips else None
+            if not targets:
+                raw = (sess.read_file(f"{WAF_HOME}/bans.txt") or "").split()
+                targets = _norm_ips(raw)
+            if caps.iptables and (caps.root or caps.sudo):
+                prefix = "" if caps.root else "sudo -n "
+                if targets:
+                    for ip in targets:
+                        r = sess.exec(prefix + f"iptables -D INPUT -s {ip} -j DROP "
+                                      "-m comment --comment ctf-ops-ban", timeout=12)
+                        if r.rc == 0:
+                            res["removed"].append(ip)
+                else:
+                    # 不知道具体 IP 时，按 comment 精准清理
+                    sess.exec("iptables -S INPUT 2>/dev/null | grep -F 'ctf-ops-ban' "
+                              "| sed 's/^-A/-D/' | sh 2>/dev/null; true", timeout=25)
+                    res["detail"].append("按 ctf-ops-ban 标记清理全部规则")
+            sess.exec(f"rm -f {WAF_HOME}/bans.txt", timeout=10)
+            if caps.allow_override and caps.webroot:
+                path = posixpath.join(caps.webroot.rstrip("/"), ".htaccess")
+                old = sess.read_file(path) or ""
+                if BAN_MARK in old:
+                    sess.write_file(path, re.sub(
+                        BAN_MARK + r".*?" + BAN_MARK_END + r"\n?", "", old, flags=re.S))
+                    res["detail"].append(".htaccess 里的封禁段已移除")
+            res["bans_left"] = list_bans(cfg, target).get("bans", [])
+    except Exception as e:  # noqa: BLE001
+        res["ok"] = False
+        res["error"] = str(e)
+    return res
+
+
+def list_bans(cfg: Config, target: Target) -> Dict[str, Any]:
+    """看这台机器现在封了谁（PHP 黑名单 + iptables 里带标记的规则）。"""
+    out: Dict[str, Any] = {"bans": [], "iptables": [], "php": []}
+    try:
+        with SSHSession(target, cfg) as sess:
+            php = _norm_ips((sess.read_file(f"{WAF_HOME}/bans.txt") or "").split())
+            ipt = []
+            r = sess.exec("iptables -S INPUT 2>/dev/null | grep -F 'ctf-ops-ban' "
+                          "|| sudo -n iptables -S INPUT 2>/dev/null | grep -F 'ctf-ops-ban'",
+                          timeout=15)
+            for line in (r.out or "").splitlines():
+                m = re.search(r"-s (\d+\.\d+\.\d+\.\d+)", line)
+                if m:
+                    ipt.append(m.group(1))
+            out["php"] = php
+            out["iptables"] = ipt
+            out["bans"] = list(dict.fromkeys(ipt + php))
+    except Exception as e:  # noqa: BLE001
+        out["error"] = str(e)
+    return out
 
 
 def collect(cfg: Config, store, targets: List[Target], limit: int = 300) -> Dict[str, Any]:

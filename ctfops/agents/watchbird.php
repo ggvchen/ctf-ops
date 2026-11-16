@@ -36,6 +36,26 @@ $uri = isset($_SERVER['REQUEST_URI']) ? $_SERVER['REQUEST_URI'] : '';
 $ua = isset($_SERVER['HTTP_USER_AGENT']) ? $_SERVER['HTTP_USER_AGENT'] : '';
 $method = isset($_SERVER['REQUEST_METHOD']) ? $_SERVER['REQUEST_METHOD'] : 'GET';
 
+/* IP 黑名单：不需要 root、不需要防火墙，直接在请求内拒绝。
+   由主控通过 SSH 往 bans.txt 追加（目录 777），比 iptables 更适合普通权限的站。 */
+$wb_bans_file = $WB_DIR . '/bans.txt';
+if (@is_file($wb_bans_file)) {
+    $wb_bans = @file($wb_bans_file, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+    if (is_array($wb_bans) && in_array($ip, $wb_bans, true)) {
+        @file_put_contents($WB_DIR . '/audit.jsonl',
+            json_encode(array('ts' => time(), 'ip' => $ip, 'method' => $method,
+                              'path' => substr($uri, 0, 1200), 'ua' => substr($ua, 0, 300),
+                              'status' => 403, 'rule_id' => 'ip-ban',
+                              'name' => 'IP 黑名单', 'severity' => 'high',
+                              'matched' => $ip, 'action' => 'block'),
+                JSON_UNESCAPED_UNICODE) . "\n", FILE_APPEND | LOCK_EX);
+        http_response_code(403);
+        header('Content-Type: text/plain; charset=utf-8');
+        echo "banned\n";
+        exit;
+    }
+}
+
 /* 部署自检：仅本机可触发，用来确认 auto_prepend 真的生效 */
 if (isset($_GET['__wb_probe']) && ($ip === '127.0.0.1' || $ip === '::1')) {
     header('X-Watchbird: ok');

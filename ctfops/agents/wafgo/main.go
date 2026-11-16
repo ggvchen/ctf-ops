@@ -156,7 +156,7 @@ type Agent struct {
 }
 
 func (a *Agent) load() {
-	a.cfg = Config{Mode: "monitor", BanCmd: "iptables -I INPUT -s {ip} -j DROP"}
+	a.cfg = Config{Mode: "monitor", BanCmd: "iptables -I INPUT -s {ip} -j DROP -m comment --comment ctf-ops-ban"}
 	readJSON(filepath.Join(a.home, "config.json"), &a.cfg)
 	if a.cfg.Mode == "" {
 		a.cfg.Mode = "monitor"

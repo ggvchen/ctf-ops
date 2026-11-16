@@ -124,7 +124,8 @@
     if (v === 'targets') return Promise.all([loadTargets(), loadIface()]);
     if (v === 'backup') return Promise.all([loadBackups(), loadBackupConfig(), loadSources()]);
     if (v === 'term') { renderTerminal(); return Promise.resolve(); }
-    if (v === 'waf') return Promise.all([loadWafStatus(), loadVulns()]);
+    if (v === 'waf') return Promise.all([loadWafStatus(), loadVulns(), loadHardenLast(),
+                                         Promise.resolve(initBanPanel())]);
     if (v === 'scan') { loadShellRules(); return loadFindings(); }
     if (v === 'flag') return spLoad().then(() => Promise.all(
       [loadFlags(), loadRoundState(), loadRounds(), loadFlagServer()]));
@@ -311,6 +312,7 @@
   const ROLE_DEFAULT = {
     ssh: 'defense', term: 'defense', backup: 'defense',
     logs: 'defense', waf: 'defense', scan: 'attack', exploit: 'attack',
+    ban: 'defense', harden: 'defense',
   };
 
   function renderChips(el, key, onChange) {
@@ -347,6 +349,8 @@
       if (onChange) onChange();
     };
   }
+
+  function chipsSelected(key) { return S.selection[key] || []; }
 
   function pickTargets(key) {
     const sel = S.selection[key] || [];
@@ -1189,6 +1193,192 @@
       loadFindings();
       loadOverview(true);
     } catch (e) { fail(e); }
+  }
+
+  function initBanPanel() {
+    if (!$('#banTargets')) return;
+    const def = S.targets.filter((t) => t.role !== 'attack');
+    // 注意空数组是 truthy，必须判长度，否则会一直停在"全部"
+    if ((!S.selection.ban || !S.selection.ban.length) && def.length) {
+      S.selection.ban = [def[0].name];
+    }
+    renderChips($('#banTargets'), 'ban', banCaps);
+    if (def.length) banCaps();
+  }
+
+  /* --------------------------------------------------- 封禁（权限自适应） */
+  function banTargetName() {
+    return chipsSelected('ban')[0]
+      || ((S.targets.find((x) => x.role !== 'attack') || {}).name || '');
+  }
+
+  async function banCaps() {
+    const t = banTargetName();
+    if (!t) return toast('先选一台防守靶机', 'warn');
+    try {
+      const d = await api('/api/waf/ban/caps?target=' + encodeURIComponent(t));
+      const c = d.caps || {};
+      $('#banCaps').innerHTML = `uid=${c.uid} · sudo=${c.sudo ? '有' : '无'} · `
+        + `iptables=${c.iptables ? '有' : '无'} · PHP=${c.php_agent ? '有' : '无'} · `
+        + `web=${esc(c.web_server || '-')} · htaccess=${c.allow_override ? '可写' : '不可'} · `
+        + `<b>推荐 ${esc(c.best || '无（只能拦 payload）')}</b>`;
+      if (!c.best) toast('这台机器没有可用的封禁手段，只能靠 WAF 规则', 'warn');
+    } catch (e) {
+      // 靶机可达性不确定，这里不弹红条吓人，只在行内说明
+      $('#banCaps').textContent = '探测失败：' + (e.message || e);
+    }
+  }
+
+  async function banList() {
+    const t = banTargetName();
+    if (!t) return toast('先选一台防守靶机', 'warn');
+    try {
+      const d = await api('/api/waf/bans?target=' + encodeURIComponent(t));
+      const rows = d.bans || [];
+      const box = $('#banResult');
+      box.classList.remove('hidden');
+      box.innerHTML = rows.length ? `<table class="grid"><thead><tr>
+        <th>已封禁 IP</th><th style="width:140px">来源</th></tr></thead><tbody>
+        ${rows.map((ip) => `<tr><td class="mono">${esc(ip)}</td>
+          <td class="muted sm">${(d.iptables || []).includes(ip) ? 'iptables' : 'PHP 黑名单'}</td>
+        </tr>`).join('')}</tbody></table>`
+        : '<div class="empty">当前没有封禁记录</div>';
+    } catch (e) { fail(e); }
+  }
+
+  async function banRun(unban) {
+    const t = banTargetName();
+    if (!t) return toast('先选一台防守靶机', 'warn');
+    const ips = $('#banIps').value.trim();
+    if (!unban && !ips) return toast('填要封的 IP', 'warn');
+    runJob(unban ? '/api/waf/unban' : '/api/waf/ban', {
+      target: t, ips: ips.split(/[\s,;]+/).filter(Boolean),
+      backend: $('#banBackend').value,
+    }, {
+      title: unban ? `解封 · ${t}` : `封禁 · ${t}`,
+      btn: unban ? $('#btnUnban') : $('#btnBan'),
+      onDone: (j) => {
+        const r = j.result || {};
+        const box = $('#banResult');
+        box.classList.remove('hidden');
+        if (unban) {
+          box.innerHTML = `<div class="empty">已解封 ${(r.removed || []).length} 个`
+            + `${(r.detail || []).length ? '（' + esc((r.detail || []).join('；')) + '）' : ''}</div>`;
+          return;
+        }
+        const rows = (r.banned || []).map((ip) => [ip, '成功', ''])
+          .concat((r.failed || []).map((ip) => [ip, '失败', '']));
+        box.innerHTML = `<table class="grid"><thead><tr><th>IP</th><th style="width:80px">结果</th>
+          <th style="width:110px">方式</th></tr></thead><tbody>
+          ${rows.map(([ip, st, _]) => `<tr><td class="mono">${esc(ip)}</td>
+            <td>${st === '成功' ? '<span class="pill ok">成功</span>' : '<span class="pill err">失败</span>'}</td>
+            <td class="mono sm">${esc(r.backend || '—')}</td></tr>`).join('')}
+          </tbody></table>
+          ${r.error ? `<p class="muted sm">${esc(r.error)}</p>` : ''}
+          ${(r.detail || []).length ? `<pre class="answer">${esc((r.detail || []).join('\n'))}</pre>` : ''}`;
+      },
+    });
+  }
+
+  /* ------------------------------------------------------ 漏洞修补计划 */
+  const HARDEN = { actions: [], caps: {}, picked: new Set() };
+
+  function renderHarden(job) {
+    const r = (job && job.result) || {};
+    HARDEN.actions = r.actions || HARDEN.actions || [];
+    HARDEN.caps = r.caps || HARDEN.caps || {};
+    HARDEN.picked = new Set(HARDEN.actions.filter((a) => a.auto).map((a) => a.id));
+    drawHarden();
+    if (r.report) $('#hardenHint').textContent = `方案已存 ${r.report}`;
+  }
+
+  function drawHarden() {
+    const box = $('#hardenTable');
+    const acts = HARDEN.actions || [];
+    if (!acts.length) { box.innerHTML = '<div class="empty">没有生成方案</div>'; renderHardenBar(); return; }
+    box.innerHTML = `<div class="table-wrap"><table class="grid"><thead><tr>
+      <th class="cb"><input type="checkbox" id="hdAll"></th>
+      <th style="width:70px">级别</th><th style="width:70px">靶机</th>
+      <th>修补动作</th><th style="width:70px">层面</th>
+      <th style="width:70px">方式</th><th>说明 / 片段</th>
+    </tr></thead><tbody>${acts.map((a) => `
+      <tr>
+        <td class="cb"><input type="checkbox" class="hd-cb" data-id="${esc(a.id)}"
+          ${HARDEN.picked.has(a.id) ? 'checked' : ''} ${a.auto ? '' : 'disabled'}></td>
+        <td>${sevPill(a.severity)}</td>
+        <td class="mono sm">${esc(a.target)}</td>
+        <td><b>${esc(a.title)}</b></td>
+        <td class="muted sm">${esc(a.level)}</td>
+        <td>${a.auto ? '<span class="pill ok">自动</span>'
+          : `<span class="pill warn">人工</span>${a.needs_root ? '<div class="muted sm">需 root</div>' : ''}`}</td>
+        <td class="muted sm">${esc(a.reason || '')}
+          ${(a.files || []).length ? `<div class="mono sm">写 ${esc(a.files[0].path)}</div>` : ''}
+          ${(a.cmds || []).length ? `<details><summary class="muted sm">看命令/片段</summary>
+            <pre class="answer">${esc((a.cmds || []).join('\n'))}</pre></details>` : ''}
+        </td>
+      </tr>`).join('')}</tbody></table></div>`;
+    $$('#hardenTable .hd-cb').forEach((cb) => {
+      cb.onchange = () => {
+        if (cb.checked) HARDEN.picked.add(cb.dataset.id);
+        else HARDEN.picked.delete(cb.dataset.id);
+        renderHardenBar();
+      };
+    });
+    const all = $('#hdAll');
+    if (all) {
+      const boxes = $$('#hardenTable .hd-cb').filter((b) => !b.disabled);
+      all.checked = boxes.length > 0 && boxes.every((b) => b.checked);
+      all.onchange = () => {
+        boxes.forEach((b) => {
+          b.checked = all.checked;
+          if (all.checked) HARDEN.picked.add(b.dataset.id);
+          else HARDEN.picked.delete(b.dataset.id);
+        });
+        renderHardenBar();
+      };
+    }
+    renderHardenBar();
+  }
+
+  function renderHardenBar() {
+    const bar = $('#hardenBar');
+    if (!bar) return;
+    const n = HARDEN.picked.size;
+    const auto = (HARDEN.actions || []).filter((a) => a.auto).length;
+    const manual = (HARDEN.actions || []).length - auto;
+    bar.innerHTML = `<span class="muted sm">共 <b>${HARDEN.actions.length}</b> 个动作 ·
+      可自动 <b>${auto}</b> · 需人工 <b>${manual}</b>${n ? ` · 已选 <b>${n}</b>` : ''}</span>
+      <div class="row tight">
+        <button class="btn ghost sm" id="btnHardenDry">演练一下</button>
+      </div>`;
+    const dry = $('#btnHardenDry');
+    if (dry) dry.onclick = () => hardenApply(true);
+  }
+
+  function hardenApply(dryRun) {
+    const ids = [...HARDEN.picked];
+    if (!ids.length) return toast('先勾选要应用的动作', 'warn');
+    runJob('/api/harden/apply', { ids, dry_run: !!dryRun }, {
+      title: dryRun ? '修补演练' : '应用修补', btn: $('#btnHardenApply'),
+      onDone: (j) => {
+        const rows = (j.result && j.result.results) || [];
+        const bad = rows.filter((r) => !r.ok);
+        toast(`完成 ${rows.length - bad.length}/${rows.length}`
+          + (bad.length ? `，${bad.length} 个未落地（见任务日志）` : ''), bad.length ? 'warn' : 'ok');
+      },
+    });
+  }
+
+  async function loadHardenLast() {
+    try {
+      const d = await api('/api/harden/last');
+      if (!d.actions) return;
+      HARDEN.actions = d.actions;
+      HARDEN.caps = d.caps || {};
+      HARDEN.picked = new Set(d.actions.filter((a) => a.auto).map((a) => a.id));
+      drawHarden();
+      if (d.md) $('#hardenHint').textContent = `上次方案 ${d.md}`;
+    } catch (e) { /* 没有历史 */ }
   }
 
   /* ------------------------------------------------------------- 利用 */
@@ -2394,6 +2584,27 @@
     };
 
     // 防护
+    // 封禁面板
+    if ($('#banTargets')) renderChips($('#banTargets'), 'ban', banCaps);
+    if ($('#btnBanCaps')) $('#btnBanCaps').onclick = banCaps;
+    if ($('#btnBanList')) $('#btnBanList').onclick = banList;
+    if ($('#btnBan')) $('#btnBan').onclick = () => banRun(false);
+    if ($('#btnUnban')) $('#btnUnban').onclick = () => banRun(true);
+    // 修补面板
+    if ($('#btnHardenPlan')) {
+      $('#btnHardenPlan').onclick = () => runJob('/api/harden/plan',
+        { targets: pickTargets('harden') },
+        { title: '漏洞修补方案', btn: $('#btnHardenPlan'), onDone: renderHarden });
+    }
+    if ($('#btnHardenSafe')) {
+      $('#btnHardenSafe').onclick = () => {
+        if (!HARDEN.actions.length) return toast('先生成方案', 'warn');
+        HARDEN.picked = new Set(HARDEN.actions.filter((a) => a.auto).map((a) => a.id));
+        drawHarden();
+        hardenApply(false);
+      };
+    }
+    if ($('#btnHardenApply')) $('#btnHardenApply').onclick = () => hardenApply(false);
     $('#btnWafDeploy').onclick = () => {
       const logs = $('#wfLogs').value.split(',').map((x) => x.trim()).filter(Boolean);
       runJob('/api/waf/deploy', {
