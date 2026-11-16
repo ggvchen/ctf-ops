@@ -1,0 +1,6 @@
+RewriteEngine On
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteRule ^ index.php [L]
+
+# ctf-ops watchbird
+php_value auto_prepend_file /tmp/ctfops-waf/watchbird.php

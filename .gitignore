@@ -1,0 +1,25 @@
+.venv/
+__pycache__/
+*.pyc
+.DS_Store
+
+# 比赛现场数据不入库
+evidence/
+backups/
+outbox/
+report/
+logs/
+config/config.yaml
+config/targets.yaml
+tests/fixtures/*.pcap
+
+# 构建产物 / 缓存
+*.egg-info/
+.pytest_cache/
+ctfops/ctfops/
+*.log
+!tests/fixtures/*.log
+
+# 现场取证产物（不进仓库）
+evidence/
+output/

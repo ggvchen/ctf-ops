@@ -1,0 +1,52 @@
+name: "本地自测"
+mode: ctf
+workdir: /Users/ggvchen/Desktop/网络安全比赛/ctf-ops
+targets:
+  - name: local
+    host: 127.0.0.1
+    user: ggvchen
+    password: ""
+    web: ["http://127.0.0.1:18080"]
+    tags: [local]
+    role: defense
+  - name: "10.16.0.11"
+    host: "10.16.0.11"
+    ssh_port: 22
+    user: "root"
+    role: attack
+    web:
+      - "http://10.16.0.11"
+    tags: ["attack"]
+  - name: "10.16.0.12"
+    host: "10.16.0.12"
+    ssh_port: 22
+    user: "root"
+    role: attack
+    web:
+      - "http://10.16.0.12:8080"
+    tags: ["attack"]
+  - name: "target.gov.cn"
+    host: "target.gov.cn"
+    ssh_port: 22
+    user: "root"
+    role: attack
+    web:
+      - "http://target.gov.cn"
+    tags: ["attack"]
+  - name: "localhost"
+    host: "localhost"
+    ssh_port: 22
+    user: "root"
+    role: attack
+    web:
+      - "http://localhost:18080"
+    tags: ["attack"]
+ssh:
+  user: ggvchen
+  timeout: 3
+scan:
+  http_timeout: 5
+ai:
+  enabled: false
+submit:
+  mode: manual

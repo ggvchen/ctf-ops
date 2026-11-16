@@ -1,0 +1,895 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ctf-ops · 作战控制台</title>
+<link rel="stylesheet" href="/static/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%232563eb'/><path d='M9 20l4-9 3 6 3-6 4 9' stroke='white' stroke-width='2.4' fill='none' stroke-linecap='round' stroke-linejoin='round'/></svg>">
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar">
+    <div class="brand">
+      <svg viewBox="0 0 32 32" width="26" height="26" aria-hidden="true">
+        <rect width="32" height="32" rx="8" fill="#2563eb"/>
+        <path d="M9 21l4-10 3 7 3-7 4 10" stroke="#fff" stroke-width="2.2" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      <div><b>ctf-ops</b><span>作战控制台</span></div>
+    </div>
+
+    <nav id="nav">
+      <button class="nav-item active" data-view="overview">
+        <svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>
+        <span>总览</span>
+      </button>
+      <button class="nav-item" data-view="targets">
+        <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="6" rx="2"/><rect x="3" y="14" width="18" height="6" rx="2"/><path d="M7 7h.01M7 17h.01"/></svg>
+        <span>靶机</span>
+      </button>
+      <button class="nav-item" data-view="ssh">
+        <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9l3 3-3 3M13 15h4"/></svg>
+        <span>运维</span>
+      </button>
+      <button class="nav-item" data-view="term">
+        <svg viewBox="0 0 24 24"><rect x="3" y="3" width="8" height="8" rx="1.5"/><rect x="13" y="3" width="8" height="8" rx="1.5"/><rect x="3" y="13" width="8" height="8" rx="1.5"/><rect x="13" y="13" width="8" height="8" rx="1.5"/></svg>
+        <span>终端</span>
+      </button>
+      <button class="nav-item" data-view="backup">
+        <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="5" rx="1.5"/><path d="M5 9v10a1 1 0 001 1h12a1 1 0 001-1V9M10 13h4"/></svg>
+        <span>备份</span>
+      </button>
+      <button class="nav-item" data-view="waf">
+        <svg viewBox="0 0 24 24"><path d="M12 3l7 3v6c0 4.4-3 7.6-7 9-4-1.4-7-4.6-7-9V6z"/><path d="M9 12l2 2 4-4"/></svg>
+        <span>防护</span>
+      </button>
+      <button class="nav-item" data-view="scan">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3"/></svg>
+        <span>扫描</span>
+      </button>
+      <button class="nav-item" data-view="exploit">
+        <svg viewBox="0 0 24 24"><path d="M13 2L4.5 13.5H11l-1 8.5 8.5-11.5H12l1-8.5z"/></svg>
+        <span>利用</span>
+      </button>
+      <button class="nav-item" data-view="flag">
+        <svg viewBox="0 0 24 24"><path d="M6 21V4M6 5h11l-2 4 2 4H6"/></svg>
+        <span>FLAG</span>
+      </button>
+      <button class="nav-item" data-view="logs">
+        <svg viewBox="0 0 24 24"><path d="M14 3H7a2 2 0 00-2 2v14a2 2 0 002 2h10a2 2 0 002-2V8z"/><path d="M14 3v5h5M9 13h6M9 17h6"/></svg>
+        <span>日志</span>
+      </button>
+      <button class="nav-item" data-view="traffic">
+        <svg viewBox="0 0 24 24"><path d="M3 12h4l2.5 7 4-14 2.5 7h5"/></svg>
+        <span>流量</span>
+      </button>
+      <button class="nav-item" data-view="shots">
+        <svg viewBox="0 0 24 24"><path d="M4 8h3l1.5-2h7L17 8h3a1 1 0 011 1v9a1 1 0 01-1 1H4a1 1 0 01-1-1V9a1 1 0 011-1z"/><circle cx="12" cy="13" r="3.2"/></svg>
+        <span>取证</span>
+      </button>
+      <button class="nav-item" data-view="ai">
+        <svg viewBox="0 0 24 24"><rect x="7" y="7" width="10" height="10" rx="2"/><path d="M10 3v4M14 3v4M10 17v4M14 17v4M3 10h4M3 14h4M17 10h4M17 14h4"/></svg>
+        <span>AI</span>
+      </button>
+      <button class="nav-item" data-view="report">
+        <svg viewBox="0 0 24 24"><path d="M9 3h6a2 2 0 012 2v14a2 2 0 01-2 2H9a2 2 0 01-2-2V5a2 2 0 012-2z"/><path d="M9 3v4h6M9 12h6M9 16h4"/></svg>
+        <span>报告</span>
+      </button>
+    </nav>
+
+    <div class="sidefoot">
+      <div id="sideName">—</div>
+      <div class="muted" id="sideMeta">连接中…</div>
+    </div>
+  </aside>
+
+  <main>
+    <header class="topbar">
+      <div class="titles">
+        <h1 id="pageTitle">总览</h1>
+        <p id="pageSub">比赛现场作战态势</p>
+      </div>
+      <div class="top-right">
+        <span class="ws-chip" id="wsChip" title="日志推送通道"><i></i>连接中</span>
+        <div class="chips" id="statusChips"></div>
+      </div>
+    </header>
+
+    <div class="stale-bar hidden" id="staleBar"></div>
+
+    <div class="content" id="content">
+
+      <section class="view active" data-view="overview">
+        <div class="cards" id="ovCards"></div>
+        <div class="grid-2">
+          <div class="panel">
+            <div class="panel-head"><h2>严重度分布</h2><button class="btn ghost sm" data-refresh>刷新</button></div>
+            <div class="panel-body" id="ovSeverity"></div>
+          </div>
+          <div class="panel">
+            <div class="panel-head"><h2>快速动作</h2></div>
+            <div class="panel-body quick">
+              <button class="btn" data-quick="backup">立即备份全部</button>
+              <button class="btn" data-quick="ports">扫端口</button>
+              <button class="btn" data-quick="flag">找 FLAG</button>
+              <button class="btn ghost" data-quick="web">Web 指纹</button>
+              <button class="btn ghost" data-quick="snapshot">现场快照</button>
+              <button class="btn ghost" data-quick="report">生成报告</button>
+              <div class="hints">
+                <div><b>先备份</b><span>动任何配置前跑一次 baseline，被打挂能一分钟回滚</span></div>
+                <div><b>再找分</b><span>FLAG 检索是 AWD 性价比最高的动作，flag 常落在 /flag 与 web 目录</span></div>
+                <div><b>后取证</b><span>每步操作都会入库，收尾直接出报告与时间线</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><h2>靶机</h2><a class="link" href="#targets">管理 →</a></div>
+          <div class="panel-body" id="ovTargets"></div>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><h2>最新发现</h2><span class="muted" id="ovFindingsCount"></span></div>
+          <div class="panel-body tight" id="ovFindings"></div>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><h2>自动作战</h2>
+            <div class="row tight">
+              <span class="muted sm" id="autoHint">防守靶机自动守 · 攻击目标自动打</span>
+              <button class="btn ghost sm" id="btnAutoRefresh">刷新</button>
+            </div>
+          </div>
+          <div class="panel-body">
+            <div class="row">
+              <button class="btn" id="btnAutoAll">全流程（守+打+交）</button>
+              <button class="btn ghost" id="btnAutoDef">只防守</button>
+              <button class="btn ghost" id="btnAutoAtk">只攻击</button>
+              <label class="inline"><input type="checkbox" id="autoBackup" checked> 含备份</label>
+              <label class="inline"><input type="checkbox" id="autoShell" checked> 含查杀</label>
+              <label class="inline"><input type="checkbox" id="autoReplay" checked> 含重放</label>
+            </div>
+            <div class="row" style="margin-top:8px">
+              <span class="pill" id="autoLoopPill">定时未开</span>
+              <label class="inline">每
+                <select id="autoInterval" class="mini">
+                  <option value="300">5 分钟</option>
+                  <option value="600">10 分钟</option>
+                  <option value="900" selected>15 分钟</option>
+                  <option value="1800">30 分钟</option>
+                </select>
+                跑一轮
+              </label>
+              <button class="btn" id="btnAutoLoopStart">启动定时</button>
+              <button class="btn ghost" id="btnAutoLoopStop" disabled>停止</button>
+              <span class="muted sm" id="autoLoopNext"></span>
+              <span style="flex:1"></span>
+              <button class="btn ghost" id="btnAiTriage">AI 排序攻击路径</button>
+            </div>
+            <div class="table-wrap" id="autoResult"><div class="empty">还没有跑过自动作战</div></div>
+            <div class="table-wrap hidden" id="aiTriageBox"></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="view" data-view="targets">
+        <div class="panel">
+          <div class="panel-head">
+            <div class="row tight"><h2>靶机清单</h2><span class="muted sm" id="tgCount"></span></div>
+            <div class="batch-bar hidden" id="batchBar">
+              <span class="muted sm" id="batchCount">已选 0 台</span>
+              <select id="batchRole" class="mini wide">
+                <option value="defense">设为防守</option>
+                <option value="attack">设为攻击</option>
+              </select>
+              <button class="btn ghost sm" id="btnBatchRole">应用角色</button>
+              <button class="btn ghost sm" id="btnBatchWebroot">改备份源</button>
+              <button class="btn ghost sm" id="btnBatchDelete">删除</button>
+            </div>
+          </div>
+          <div class="panel-body tight" id="targetTable"></div>
+        </div>
+        <div class="panel collapsible" data-collapse="iface-config">
+          <div class="panel-head">
+            <div class="row tight"><h2>接口配置</h2><span class="muted sm" id="ifaceSource"></span></div>
+            <div class="row tight">
+              <button class="btn ghost sm" id="btnIfaceReload">重新载入</button>
+              <button class="btn sm" id="btnIfaceSave">保存配置</button>
+              <button class="icon-btn fold" data-fold title="折叠 / 展开">⌃</button>
+            </div>
+          </div>
+          <div class="panel-body">
+            <p class="muted sm">比赛开始前在这里一次填完：<b>拿到 flag 往哪交</b>、<b>怎么从靶机问到 flag</b>。
+              占位符 <code>{flag}</code> <code>{token}</code> <code>{token_url}</code> <code>{ip}</code> <code>{host}</code> <code>{name}</code> 会按靶机替换
+              （<code>{token_url}</code> 会自动做 URL 编码，base64 token 里的 <code>+ / =</code> 必须用它）。</p>
+            <div class="iface-grid">
+              <div class="iface-col">
+                <h3>提交 flag 接口</h3>
+                <p class="muted sm">与 flag 页的 cURL 导入是同一份配置（存的是「页面配置」这条）。</p>
+                <div class="form-stack">
+                  <label>接口地址
+                    <input id="ifSubUrl" placeholder="https://platform.example.com/api/flag/submit">
+                  </label>
+                  <div class="row">
+                    <label class="inline flex1">方法
+                      <select id="ifSubMethod" class="mini">
+                        <option>POST</option><option>GET</option><option>PUT</option>
+                      </select>
+                    </label>
+                    <label class="inline flex1">请求体类型
+                      <select id="ifSubBodyType" class="mini wide">
+                        <option value="json">JSON</option>
+                        <option value="form">表单</option>
+                        <option value="raw">原样</option>
+                      </select>
+                    </label>
+                  </div>
+                  <label>请求体
+                    <textarea id="ifSubBody" rows="3" placeholder='{"flag":"{flag}"}'></textarea>
+                  </label>
+                  <label>请求头（JSON）
+                    <textarea id="ifSubHeaders" rows="2" placeholder='{"Content-Type":"application/json"}'></textarea>
+                  </label>
+                  <div class="row">
+                    <label class="inline flex1">成功字段
+                      <input id="ifSubSuccess" class="mini wide" placeholder="success">
+                    </label>
+                    <label class="inline flex1">Token
+                      <input id="ifSubToken" type="password" placeholder="留空=不改">
+                    </label>
+                  </div>
+                  <p class="muted sm" id="ifSubHint">—</p>
+                </div>
+              </div>
+              <div class="iface-col">
+                <h3>flag 服务器（经靶机取）</h3>
+                <p class="muted sm">在靶机上用 curl/wget/python3 请求内网接口；token 可来自靶机文件。</p>
+                <div class="form-stack">
+                  <div class="row">
+                    <label class="inline flex1">方式
+                      <select id="ifFsMode" class="mini">
+                        <option value="http">HTTP 请求</option>
+                        <option value="cmd">本地命令</option>
+                      </select>
+                    </label>
+                    <label class="inline flex1">范围
+                      <select id="ifFsScope" class="mini wide">
+                        <option value="defense">防守靶机</option>
+                        <option value="attack">攻击目标</option>
+                        <option value="all">全部</option>
+                      </select>
+                    </label>
+                  </div>
+                  <label id="ifFsUrlWrap">服务器地址
+                    <input id="ifFsUrl" placeholder="http://10.10.0.1/api/flag?token={token}&host={ip}">
+                  </label>
+                  <label id="ifFsCmdWrap" class="hidden">本地命令
+                    <input id="ifFsCmd" placeholder="./readflag 或 cat /flag">
+                  </label>
+                  <div class="row">
+                    <label class="inline flex1" id="ifFsMethodWrap">方法
+                      <select id="ifFsMethod" class="mini">
+                        <option>GET</option><option>POST</option>
+                      </select>
+                    </label>
+                    <label class="inline flex1">响应字段
+                      <input id="ifFsField" class="mini wide" placeholder="data.flag，留空=正则扫">
+                    </label>
+                  </div>
+                  <label>请求头（JSON）
+                    <textarea id="ifFsHeaders" rows="2" placeholder='{"X-Token":"{token}"}'></textarea>
+                  </label>
+                  <label id="ifFsBodyWrap">请求体（可留空）
+                    <input id="ifFsBody" placeholder='{"host":"{ip}","token":"{token}"}'>
+                  </label>
+                  <label>在靶机上取 token 的命令
+                    <input id="ifFsTokenCmd" placeholder="cat /flag_token 2>/dev/null || cat /token">
+                  </label>
+                  <div class="row">
+                    <label class="inline"><input type="checkbox" id="ifFsSubmit" checked> 拉到自动提交</label>
+                    <label class="inline">工具
+                      <select id="ifFsTool" class="mini">
+                        <option value="auto">自动降级</option>
+                        <option value="curl">curl</option>
+                        <option value="wget">wget</option>
+                        <option value="python3">python3</option>
+                      </select>
+                    </label>
+                  </div>
+                  <p class="muted sm" id="ifFsHint">—</p>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><h2>添加靶机</h2><span class="muted">写入 targets.yaml，保留原注释</span></div>
+          <div class="panel-body">
+            <form id="targetForm" class="form-grid cols3">
+              <label>角色
+                <select name="role">
+                  <option value="defense">防守（我方靶机）</option>
+                  <option value="attack">攻击目标</option>
+                </select>
+              </label>
+              <label>名称<input name="name" placeholder="web-03"></label>
+              <label>地址<input name="host" placeholder="10.16.0.74" required></label>
+              <label>SSH 端口<input name="ssh_port" value="22"></label>
+              <label>用户<input name="user" value="root"></label>
+              <label>密码<input name="password" type="password" placeholder="留空表示用密钥"></label>
+              <label>标签<input name="tags" placeholder="web,php"></label>
+              <label class="span2">Web 地址<input name="web" placeholder="http://10.16.0.74, http://10.16.0.74:8080"></label>
+              <label class="span3">备注<input name="note" placeholder="政务门户 ThinkPHP"></label>
+              <div class="form-actions span3"><button class="btn" type="submit">添加</button></div>
+            </form>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><h2>批量添加攻击目标</h2><span class="muted">一行一个 IP / 域名，支持 host:port 与 # 注释</span></div>
+          <div class="panel-body">
+            <label class="block">目标列表
+              <textarea id="bulkText" rows="5" placeholder="10.16.0.11&#10;10.16.0.12:8080 政务门户&#10;http://target.gov.cn&#10;# 注释行会被忽略"></textarea>
+            </label>
+            <div class="row">
+              <label class="inline">角色
+                <select id="bulkRole" class="mini">
+                  <option value="attack">攻击目标</option>
+                  <option value="defense">防守靶机</option>
+                </select>
+              </label>
+              <label class="inline">用户 <input id="bulkUser" value="root" class="mini"></label>
+              <label class="inline">口令 <input id="bulkPwd" type="password" class="mini" placeholder="可留空"></label>
+              <label class="inline">SSH 端口 <input id="bulkPort" value="22" class="mini"></label>
+              <button class="btn" id="btnBulkAdd">批量写入</button>
+              <span class="muted sm" id="bulkHint"></span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="view" data-view="ssh">
+        <div class="panel">
+          <div class="panel-head"><h2>批量执行</h2><span class="muted">并发下发，结果逐台回显</span></div>
+          <div class="panel-body">
+            <div class="field"><span class="label">目标</span><div class="chips" id="sshTargets"></div></div>
+            <label class="block">命令
+              <textarea id="sshCmd" rows="5" placeholder="id; uname -a&#10;ls -la /var/www/html"></textarea>
+            </label>
+            <div class="row">
+              <label class="inline"><input type="checkbox" id="sshSudo"> sudo 执行</label>
+              <label class="inline">超时 <input type="number" id="sshTimeout" value="60" min="5" max="600" class="mini"> 秒</label>
+              <button class="btn" id="btnSshRun">执行</button>
+              <span class="muted" id="sshHint"></span>
+            </div>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><h2>输出</h2><button class="btn ghost sm" id="btnSshClear">清空</button></div>
+          <div class="panel-body tight" id="sshResult"><div class="empty">尚无输出</div></div>
+        </div>
+      </section>
+
+      <section class="view" data-view="term">
+        <div class="panel">
+          <div class="panel-head">
+            <h2>多机终端</h2>
+            <div class="row tight">
+              <span class="muted sm" id="termHint">最多同时 6 台</span>
+              <button class="btn ghost sm" id="btnTermReset">断开全部</button>
+            </div>
+          </div>
+          <div class="panel-body">
+            <div class="field"><span class="label">靶机</span><div class="chips" id="tmTargets"></div></div>
+            <div class="row">
+              <label class="inline flex1">广播命令
+                <input id="tmBroadcast" placeholder="id; hostname —— 回车发送到所有已选靶机">
+              </label>
+              <button class="btn" id="btnBroadcast">发送到全部</button>
+            </div>
+            <div class="quick-cmds">
+              <span class="muted sm">快捷</span>
+              <button class="chip-btn" data-quick-cmd="id; hostname; uname -a">身份</button>
+              <button class="chip-btn" data-quick-cmd="ss -lntp 2>/dev/null || netstat -lntp">监听端口</button>
+              <button class="chip-btn" data-quick-cmd="ps auxww | head -20">进程</button>
+              <button class="chip-btn" data-quick-cmd="last -n 10 2>/dev/null; tail -n 20 /var/log/auth.log 2>/dev/null || tail -n 20 /var/log/secure">登录日志</button>
+              <button class="chip-btn" data-quick-cmd="ls -la /var/www/html /tmp /dev/shm 2>/dev/null | head -30">关键目录</button>
+              <button class="chip-btn" data-quick-cmd="grep -rEa 'flag\{' /var/www /tmp 2>/dev/null | head -5">找 flag</button>
+            </div>
+          </div>
+        </div>
+        <div id="termGrid" class="term-grid">
+          <div class="empty">选择靶机后自动开窗</div>
+        </div>
+      </section>
+
+      <section class="view" data-view="backup">
+        <div class="panel">
+          <div class="panel-head"><h2>备份源</h2><div class="row tight">
+            <span class="muted sm" id="srcHint"></span>
+            <button class="btn ghost sm" id="btnSrcDetect">探测全部</button>
+            <button class="btn ghost sm" data-refresh>刷新</button>
+          </div></div>
+          <div class="panel-body tight" id="srcTable"><div class="empty">加载中…</div></div>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><h2>备份目录</h2><span class="muted">支持外置盘，保存后立即生效</span></div>
+          <div class="panel-body">
+            <div class="row">
+              <label class="inline flex1">目录 <input id="bkPath" placeholder="/Volumes/USB4T/ctf-ops-backups"></label>
+              <button class="btn" id="btnBkPath">保存</button>
+              <button class="btn ghost" id="btnBkPathReset">恢复默认</button>
+            </div>
+            <div class="kv" id="bkPathInfo"><div>状态<b>读取中…</b></div></div>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><h2>创建备份</h2><span class="muted">远端 tar + 可选 mysqldump，拉回并校验 sha256</span></div>
+          <div class="panel-body">
+            <div class="field"><span class="label">目标</span><div class="chips" id="bkTargets"></div></div>
+            <div class="row">
+              <label class="inline">标记 <input id="bkTag" value="baseline" class="mini wide"></label>
+              <label class="inline"><input type="checkbox" id="bkDb" checked> 一并备份 MySQL</label>
+              <button class="btn" id="btnBackup">开始备份</button>
+            </div>
+            <p class="muted sm">建议在每次改动前跑一次，tag 用 <code>baseline</code> / <code>pre-patch</code> 区分。</p>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><h2>备份记录</h2><button class="btn ghost sm" data-refresh>刷新</button></div>
+          <div class="panel-body tight" id="backupTable"></div>
+        </div>
+      </section>
+
+      <section class="view" data-view="waf">
+        <div class="panel">
+          <div class="panel-head"><h2>WAF 部署</h2><span class="muted">默认只监听：不改变业务流量，只记录攻击行为</span></div>
+          <div class="panel-body">
+            <div class="field"><span class="label">防守靶机</span><div class="chips" id="wfTargets"></div></div>
+            <div class="row">
+              <label class="inline">引擎
+                <select id="wfEngine" class="mini wide">
+                  <option value="auto">自动（Go 优先）</option>
+                  <option value="go">Go · 静态二进制（免运行时）</option>
+                  <option value="php">PHP · watchbird</option>
+                  <option value="python">python · 日志旁路</option>
+                </select>
+              </label>
+              <label class="inline">模式
+                <select id="wfMode" class="mini wide">
+                  <option value="monitor">只监听（推荐）</option>
+                  <option value="enforce">拦截并封禁</option>
+                </select>
+              </label>
+              <label class="inline flex1">访问日志 <input id="wfLogs" placeholder="留空自动探测 /var/log/nginx/access.log"></label>
+              <label class="inline"><input type="checkbox" id="wfAutoban"> 命中即封禁 IP（需 iptables）</label>
+              <button class="btn" id="btnWafDeploy">部署</button>
+            </div>
+            <p class="muted sm">
+              先试 <b>Go</b> 静态二进制（免任何运行时），PHP 站点可用 <b>watchbird.php</b> 挂
+              <code>auto_prepend_file</code>，最后才是 <b>python</b> 读日志。三者审计格式一致，
+              都写在 <code>/tmp/ctfops-waf/audit.jsonl</code>，加固时热加载规则、不重启业务。
+            </p>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head"><h2>运行状态</h2><div class="row tight">
+            <button class="btn ghost sm" id="btnWafStatus">刷新</button>
+            <button class="btn ghost sm" id="btnWafStop">停止</button>
+          </div></div>
+          <div class="panel-body tight" id="wafStatus"><div class="empty">尚未部署</div></div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head"><h2>攻击审计</h2><div class="row tight">
+            <span class="muted sm" id="wafAuditHint"></span>
+            <button class="btn ghost sm" id="btnWafAudit">拉取审计</button>
+            <button class="btn ghost sm" id="btnWafHarden">一键加固</button>
+            <button class="btn sm" id="btnWafToVuln">加入漏洞库</button>
+          </div></div>
+          <div class="panel-body tight" id="wafAudit"><div class="empty">点「拉取审计」，从防守靶机取最近的攻击命中记录</div></div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head"><h2>漏洞库</h2><div class="row tight">
+            <span class="muted sm" id="vulnHint"></span>
+            <button class="btn ghost sm" id="btnVulnRefresh">刷新</button>
+            <button class="btn sm" id="btnVulnReplay">批量重放</button>
+          </div></div>
+          <div class="panel-body tight" id="vulnTable"></div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head"><h2>重放结果</h2></div>
+          <div class="panel-body tight" id="replayResult"><div class="empty">尚未重放</div></div>
+        </div>
+      </section>
+
+      <section class="view" data-view="scan">
+        <div class="panel">
+          <div class="panel-head"><h2>资产与漏洞扫描</h2><span class="muted">nmap 不可用时自动回退内置 TCP 扫描</span></div>
+          <div class="panel-body">
+            <div class="field"><span class="label">目标</span><div class="chips" id="scTargets"></div></div>
+            <div class="row">
+              <label class="inline">端口范围 <input id="scPorts" placeholder="1-10000" class="mini wide"></label>
+              <label class="inline">nuclei 级别 <input id="scSev" placeholder="critical,high" class="mini wide"></label>
+            </div>
+            <div class="row">
+              <button class="btn" data-scan="ports">端口扫描</button>
+              <button class="btn" data-scan="web">Web 指纹</button>
+              <button class="btn" data-scan="vulns">漏洞模板</button>
+            </div>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><h2>发现汇总</h2>
+            <div class="row tight">
+              <select id="sevFilter" class="mini">
+                <option value="">全部级别</option>
+                <option value="critical,high">高危以上</option>
+                <option value="critical">critical</option>
+                <option value="high">high</option>
+                <option value="medium">medium</option>
+                <option value="low">low</option>
+                <option value="info">info</option>
+              </select>
+              <select id="fdLimit" class="mini" title="每页条数">
+                <option value="20">20 / 页</option>
+                <option value="50" selected>50 / 页</option>
+                <option value="100">100 / 页</option>
+                <option value="200">200 / 页</option>
+              </select>
+              <button class="btn ghost sm" data-refresh>刷新</button>
+            </div>
+          </div>
+          <div class="panel-body tight">
+            <div class="list-bar" id="fdBar"></div>
+            <div id="findingsTable"></div>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><h2>WebShell 查杀</h2>
+            <div class="row tight">
+              <span class="muted sm" id="shRules"></span>
+              <button class="btn ghost sm" id="btnShRules">规则库</button>
+            </div>
+          </div>
+          <div class="panel-body">
+            <div class="row">
+              <label class="inline flex1">本地路径（留空 = 从已选靶机的 webroot 拉取脚本）
+                <input id="shPath" placeholder="backups/site-20261116.tar.gz 或 /path/to/webroot">
+              </label>
+              <button class="btn" id="btnShScan">开始查杀</button>
+            </div>
+            <p class="muted sm">
+              看的是<b>文件内容</b>，不是发请求：靶机不需要 python/php 等任何运行时。
+              规则库 <code>config/rules/webshell.yaml</code>（一句话 / 冰蝎 / 哥斯拉 / 蚁剑 / 图片马 / 编码混淆等），可现场加规则、改分值。
+            </p>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><h2>查杀结果</h2><span class="muted sm" id="shSummary"></span></div>
+          <div class="panel-body tight" id="shellResult"><div class="empty">尚未扫描</div></div>
+        </div>
+      </section>
+
+      <section class="view" data-view="exploit">
+        <div class="panel">
+          <div class="panel-head"><h2>批量利用</h2><span class="muted">插件式 PoC，先 check 再打</span></div>
+          <div class="panel-body">
+            <div class="field"><span class="label">目标</span><div class="chips" id="exTargets"></div></div>
+            <div class="row">
+              <label class="inline">插件 <select id="exPlugin" class="mini widest"></select></label>
+              <label class="inline"><input type="checkbox" id="exCheck"> 只做探测（check only）</label>
+              <button class="btn" id="btnExploit">执行</button>
+            </div>
+            <p class="muted sm" id="exDesc"></p>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><h2>执行结果</h2></div>
+          <div class="panel-body tight" id="exploitTable"><div class="empty">尚未执行</div></div>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><h2>AI 写插件</h2><span class="muted">按漏洞描述生成 PoC，先落草稿再人工确认启用</span></div>
+          <div class="panel-body">
+            <label class="block">漏洞信息
+              <textarea id="plInfo" rows="4" placeholder="CVE-2021-41773 Apache 2.4.49 路径穿越：GET /cgi-bin/.%2e/.%2e/.%2e/etc/passwd 可读文件&#10;或：某系统 /download?file= 存在任意文件读取，回显在响应体"></textarea>
+            </label>
+            <div class="row">
+              <button class="btn" id="btnPlGen">生成插件</button>
+              <button class="btn ghost" id="btnPlInstall" disabled>保存并启用</button>
+              <button class="btn ghost" id="btnPlDrafts">草稿箱</button>
+              <span class="muted sm" id="plHint"></span>
+            </div>
+            <pre class="answer" id="plCode">等待生成…</pre>
+          </div>
+        </div>
+      </section>
+
+      <section class="view" data-view="flag">
+        <div class="panel">
+          <div class="panel-head"><h2>FLAG 流水线</h2><span class="muted" id="flagMode"></span></div>
+          <div class="panel-body">
+            <div class="field"><span class="label">目标</span><div class="chips" id="flTargets"></div></div>
+            <div class="row">
+              <button class="btn" id="btnHunt">上机检索 FLAG</button>
+              <label class="inline"><input type="checkbox" id="flSubmit" checked> 发现后立即提交</label>
+              <button class="btn ghost" id="btnSubmitFlags">提交待处理</button>
+            </div>
+            <div class="kv" id="flagStats"></div>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><h2>flag 服务器</h2>
+            <div class="row tight">
+              <span class="pill" id="fsPill">未配置</span>
+              <button class="btn ghost sm" id="btnFsCfg">去靶机页配置</button>
+              <button class="btn ghost sm" id="btnFsDebug">单机调试</button>
+              <button class="btn sm" id="btnFsFetch">立即拉取</button>
+            </div>
+          </div>
+          <div class="panel-body">
+            <div class="kv" id="fsMeta"></div>
+            <div class="table-wrap hidden" id="fsResult"></div>
+            <p class="muted sm">请求格式（地址/token/字段）统一在「靶机」页填写；这里是一键拉取入口。
+              靶机上会优先用 curl，缺了自动降级 wget / python3。</p>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><h2>提交接口</h2>
+            <div class="row tight">
+              <span class="pill" id="spPill">未配置</span>
+              <button class="btn ghost sm" id="btnSpReload">刷新</button>
+            </div>
+          </div>
+          <div class="panel-body">
+            <label class="block">粘贴浏览器 Copy as cURL（Network → 右键提交请求 → Copy as cURL）
+              <textarea id="spCurl" rows="5" placeholder="curl 'https://ctf.example.com/api/submit' -H 'content-type: application/json' -H 'x-csrf-token: xxx' --data-raw '{&quot;flag&quot;:&quot;flag{...}&quot;}'"></textarea>
+            </label>
+            <div class="row">
+              <label class="inline">flag 字段 <input id="spKey" class="mini wide" placeholder="自动识别，可留空"></label>
+              <button class="btn" id="btnSpParse">解析预览</button>
+              <span class="muted sm" id="spHint"></span>
+            </div>
+            <div id="spPreview"></div>
+            <div class="row hidden" id="spSaveRow">
+              <label class="inline flex1">接口名 <input id="spName" placeholder="平台域名，如 ctf.example.com"></label>
+              <label class="inline flex1">测试 flag（可选） <input id="spTestFlag" placeholder="填了会真提交一次"></label>
+              <button class="btn" id="btnSpSave">保存并启用</button>
+            </div>
+            <div class="table-wrap" id="spList"></div>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><h2>轮次监控</h2>
+            <div class="row tight">
+              <span class="pill" id="rdPill">未启动</span>
+              <span class="muted sm" id="rdNext"></span>
+            </div>
+          </div>
+          <div class="panel-body">
+            <div class="row">
+              <label class="inline">间隔
+                <select id="rdInterval" class="mini wide">
+                  <option value="60">60 秒</option>
+                  <option value="120">2 分钟</option>
+                  <option value="180">3 分钟</option>
+                  <option value="300" selected>5 分钟</option>
+                  <option value="600">10 分钟</option>
+                  <option value="900">15 分钟</option>
+                </select>
+              </label>
+              <label class="inline"><input type="checkbox" id="rdAuto" checked> 新 flag 自动提交</label>
+              <label class="inline"><input type="checkbox" id="rdDeep"> 每轮全盘 grep（慢但全）</label>
+              <button class="btn" id="btnRdStart">启动</button>
+              <button class="btn ghost" id="btnRdStop" disabled>停止</button>
+              <button class="btn ghost" id="btnRdTick">立即检查一轮</button>
+            </div>
+            <div class="kv" id="rdStats"></div>
+            <p class="muted sm">
+              AWD 每轮会换 flag：这里按固定间隔读一次，<b>内容变了就判定换轮</b>，
+              新 flag 自动入库并提交。已知 flag 落盘，重启不会把旧 flag 再交一遍。
+            </p>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><h2>轮次记录</h2>
+            <div class="row tight">
+              <span class="muted sm" id="rdSummary"></span>
+              <button class="btn ghost sm" id="btnRdReset">清空已知</button>
+              <button class="btn ghost sm" data-refresh>刷新</button>
+            </div>
+          </div>
+          <div class="panel-body tight" id="roundTable"><div class="empty">还没有轮次记录</div></div>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><h2>FLAG 列表</h2><button class="btn ghost sm" data-refresh>刷新</button></div>
+          <div class="panel-body tight" id="flagTable"></div>
+        </div>
+      </section>
+
+      <section class="view" data-view="logs">
+        <div class="panel">
+          <div class="panel-head"><h2>主机日志研判</h2><span class="muted">拉取 /var/log + 现场快照，规则先行、AI 复核</span></div>
+          <div class="panel-body">
+            <div class="field"><span class="label">目标</span><div class="chips" id="lgTargets"></div></div>
+            <div class="row">
+              <button class="btn" id="btnPull">拉日志并分析</button>
+              <button class="btn ghost" id="btnLogAnalyze">分析本地路径</button>
+              <label class="inline"><input type="checkbox" id="lgAi" checked> 启用 AI 研判</label>
+            </div>
+            <label class="block">本地路径（留空则用 evidence/logs）
+              <input id="lgPaths" data-drop="1" placeholder="evidence/logs/web-01, /tmp/auth.log　（可直接拖入文件或文件夹）">
+            </label>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><h2>分析结果</h2></div>
+          <div class="panel-body" id="logResult"><div class="empty">尚未分析</div></div>
+        </div>
+      </section>
+
+      <section class="view" data-view="traffic">
+        <div class="panel">
+          <div class="panel-head"><h2>流量分析</h2><span class="muted">tshark 解析：扫描 / 注入 / 上传 / 凭据 / 反弹 shell / flag</span></div>
+          <div class="panel-body">
+            <label class="block">pcap 路径
+              <input id="tpPath" data-drop="1" placeholder="tests/fixtures/demo.pcap　（可直接拖入 pcap 文件）">
+            </label>
+            <div class="row">
+              <button class="btn" id="btnPcap">开始分析</button>
+              <label class="inline"><input type="checkbox" id="tpAi" checked> 启用 AI 研判</label>
+              <span class="muted sm">大文件建议先 editcap 切分</span>
+            </div>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><h2>分析结果</h2></div>
+          <div class="panel-body" id="trafficResult"><div class="empty">尚未分析</div></div>
+        </div>
+      </section>
+
+      <section class="view" data-view="shots">
+        <div class="grid-2">
+          <div class="panel">
+            <div class="panel-head"><h2>登记步骤</h2><span class="muted">CTF 解题留证</span></div>
+            <div class="panel-body">
+              <form id="shotForm" class="form-stack">
+                <label>步骤名<input name="step" placeholder="3-上传webshell" required></label>
+                <label>截图 URL<input name="url" placeholder="http://target/admin.php"></label>
+                <label>说明<input name="note" placeholder="上传成功，回显 uid=33(www-data)"></label>
+                <label class="inline"><input type="checkbox" name="screen"> 截整屏（无 playwright 时）</label>
+                <button class="btn" type="submit">截图并登记</button>
+              </form>
+              <hr>
+              <form id="markForm" class="form-stack">
+                <label>已有截图登记<input name="step" placeholder="4-拿到 flag" required></label>
+                <label>图片路径<input name="image" placeholder="~/Desktop/flag.png"></label>
+                <label>说明<input name="note" placeholder="flag{...}"></label>
+                <button class="btn ghost" type="submit">登记</button>
+              </form>
+            </div>
+          </div>
+          <div class="panel">
+            <div class="panel-head"><h2>时间线</h2><div class="row tight">
+              <button class="btn ghost sm" id="btnTimeline">生成 timeline.md</button>
+              <button class="btn ghost sm" data-refresh>刷新</button></div></div>
+            <div class="panel-body" id="timelinePreview"><div class="empty">生成后可在此预览</div></div>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><h2>证据截图</h2><span class="muted" id="shotCount"></span></div>
+          <div class="panel-body" id="shotGrid"><div class="empty">暂无截图</div></div>
+        </div>
+      </section>
+
+      <section class="view" data-view="ai">
+        <div class="panel collapsible" data-collapse="ai-config">
+          <div class="panel-head"><h2>本地模型</h2><div class="row tight">
+            <span class="pill" id="aiPill">检测中</span>
+            <button class="btn ghost sm" id="btnAiModels">拉取模型列表</button>
+            <button class="btn ghost sm" id="btnAiTest">测试连通</button>
+            <button class="btn sm" id="btnAiSave">保存配置</button>
+            <button class="icon-btn fold" data-fold title="折叠 / 展开">⌃</button>
+          </div></div>
+          <div class="panel-body">
+            <p class="muted sm">OpenAI 兼容端点：LM Studio(:1234) · Ollama(:11434) · vLLM(:8000) · llama.cpp(:8080)。
+              保存直接写回 config.yaml 的 <code>ai</code> 段，立刻生效，不用重启服务。</p>
+            <div class="row tight" id="aiPresets"></div>
+            <div class="form-grid" style="margin-top:10px">
+              <label class="span2">端点 base_url
+                <input id="aiBaseUrl" placeholder="http://127.0.0.1:1234/v1">
+              </label>
+              <label class="span2">模型
+                <div class="row tight">
+                  <select id="aiModelSel" class="flex1"></select>
+                  <button class="btn ghost sm" id="btnAiModelHand" type="button"
+                          title="清单里没有？手动输入模型名">手填</button>
+                </div>
+                <input id="aiModel" class="hidden" placeholder="模型名，如 qwen2.5:7b">
+              </label>
+              <label>API Key
+                <input id="aiApiKey" type="password" placeholder="本地模型一般 not-needed">
+              </label>
+              <label>超时（秒）
+                <input id="aiTimeout" type="number" min="5" max="1800" step="5">
+              </label>
+              <label>temperature
+                <input id="aiTemp" type="number" min="0" max="2" step="0.1">
+              </label>
+              <label>max_tokens
+                <input id="aiMaxTokens" type="number" min="64" max="32768" step="64">
+              </label>
+              <label class="inline" style="align-self:end">
+                <input type="checkbox" id="aiEnabled"> 启用 AI（关掉后全走规则引擎）
+              </label>
+            </div>
+            <div class="kv" id="aiMeta"></div>
+            <pre class="answer hidden" id="aiTestOut"></pre>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><h2>提问 / 研判</h2></div>
+          <div class="panel-body">
+            <label class="block">问题
+              <textarea id="aiPrompt" rows="4" placeholder="结合以下扫描结果，给出 Top3 攻击路径与验证命令"></textarea>
+            </label>
+            <div class="row">
+              <label class="inline flex1">附带文件 <input id="aiFiles" placeholder="evidence/logs/web-01/_snapshot.txt（多个用逗号）"></label>
+              <button class="btn" id="btnAsk">提问</button>
+            </div>
+            <hr>
+            <div class="row">
+              <label class="inline flex1">源码审计 <input id="aiAuditPath" placeholder="AWD1/www/upload.php"></label>
+              <button class="btn ghost" id="btnAudit">审计</button>
+            </div>
+            <pre class="answer" id="aiAnswer">等待提问…</pre>
+          </div>
+        </div>
+      </section>
+
+      <section class="view" data-view="report">
+        <div class="panel">
+          <div class="panel-head"><h2>作战报告</h2><div class="row tight">
+            <button class="btn" id="btnReport">生成报告</button>
+            <button class="btn ghost sm" data-refresh>刷新文件</button></div></div>
+          <div class="panel-body">
+            <div class="row">
+              <label class="inline flex1">标题 <input id="reportTitle" placeholder="2026-XX 网络安全竞赛 作战报告"></label>
+            </div>
+            <p class="muted sm">输出 report/report.md、report/report.html 以及带时间戳的历史副本；HTML 可直接交付。</p>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><h2>产物</h2><span class="muted">report / evidence / backups / outbox</span></div>
+          <div class="panel-body tight" id="artifactTable"></div>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><h2>报告预览</h2></div>
+          <div class="panel-body"><pre class="answer" id="reportPreview">尚未生成</pre></div>
+        </div>
+      </section>
+
+    </div>
+  </main>
+</div>
+
+<div class="dock hidden" id="dock">
+  <div class="dock-head">
+    <div class="dock-tabs" id="dockTabs"></div>
+    <button class="icon-btn" id="dockToggle" title="收起">–</button>
+  </div>
+  <pre class="dock-log" id="dockLog"></pre>
+  <div class="dock-foot"><span id="dockStatus"></span><button class="icon-btn" id="dockClose" title="关闭">×</button></div>
+</div>
+
+<div class="modal hidden" id="modal">
+  <div class="modal-box">
+    <div class="modal-head"><h3 id="modalTitle"></h3><button class="icon-btn" id="modalClose">×</button></div>
+    <div class="modal-body" id="modalBody"></div>
+  </div>
+</div>
+
+<div id="toasts"></div>
+<script src="/static/app.js"></script>
+</body>
+</html>

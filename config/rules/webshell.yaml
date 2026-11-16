@@ -1,0 +1,236 @@
+# WebShell 静态查杀规则库（ctf-ops）
+#
+# 这个文件就是"特征库"，和 D 盾 的查杀规则是同一类东西，但规则是可读的 YAML，
+# 你可以按比赛遇到的马自己加规则，改完不用重启服务（每次扫描都重新读）。
+#
+# 字段说明：
+#   id        规则唯一标识，报告和去重都用它
+#   name      展示名（中文）
+#   severity  critical / high / medium / low
+#   score     命中加分（0-100）。单个文件累计 >=70 判 critical，>=45 high，>=25 medium
+#   category  分类，用于界面筛选：一句话/编码混淆/命令执行/冰蝎/哥斯拉/蚁剑/图片马/隐藏后门
+#   mode      any = 任一 pattern 命中即算；all = 全部 pattern 都要命中（组合特征用 all）
+#   patterns  正则（Python re，忽略大小写与换行），支持 {0,N} 这类"邻近"约束
+#   exts      只对这些扩展名生效，留空 = 所有文本文件
+#
+# 调参建议：比赛里误报多就把 score 调低；漏报就把 mode 改 any 或放宽 {0,N}。
+
+version: 2
+
+suspicious_names:
+  - '(?i)^(shell|cmd|backdoor|hack|hacktool|door|webshell|muma|1|x|a|test|upload|tmp|abc)\.(php\d?|phtml|inc|jsp|jspx|asp|aspx)$'
+  - '(?i)\.(php\d?|phtml|jsp|asp|aspx)\.(jpg|png|gif|txt|zip|bak)$'
+  - '(?i)(shell|cmd|backdoor|webshell)[\w\-]*\.(php\d?|phtml|jsp|asp)$'
+
+rules:
+  - id: ws-one-liner-eval
+    name: 一句话木马 · eval 收外部变量
+    severity: critical
+    score: 95
+    category: 一句话
+    mode: any
+    patterns:
+      - '@?\beval\s*\(\s*\$_(POST|GET|REQUEST|COOKIE|SERVER|FILES)\b'
+      - '@?\bassert\s*\(\s*\$_(POST|GET|REQUEST|COOKIE)\b'
+      - '@?\beval\s*\(\s*\$_(POST|GET|REQUEST)\s*\['
+      - '@?\bassert\s*\(\s*\$_(POST|GET|REQUEST)\s*\['
+
+  - id: ws-var-function
+    name: 变量函数动态调用（$_POST 当函数名）
+    severity: critical
+    score: 85
+    category: 一句话
+    mode: any
+    patterns:
+      - '\$_(POST|GET|REQUEST|COOKIE)\s*\[[^\]]{1,40}\]\s*\('
+      - '\$\w+\s*=\s*\$_(POST|GET|REQUEST)\s*\[[^\]]+\]\s*;\s*@?\$\w+\s*\('
+      - 'call_user_func\s*\(\s*\$_(POST|GET|REQUEST|COOKIE)'
+      - 'array_map\s*\(\s*\$_(POST|GET|REQUEST|COOKIE)'
+
+  - id: ws-base64-eval
+    name: base64_decode + 执行（常见免杀）
+    severity: critical
+    score: 80
+    category: 编码混淆
+    mode: all
+    patterns:
+      - 'base64_decode\s*\('
+      - '(eval|assert|create_function|preg_replace|call_user_func|system|exec)\s*\('
+
+  - id: ws-gzinflate-eval
+    name: 压缩流解码后执行（gzinflate/gzuncompress）
+    severity: critical
+    score: 85
+    category: 编码混淆
+    mode: all
+    patterns:
+      - '(gzinflate|gzuncompress|gzdecode|str_rot13|hex2bin)\s*\('
+      - '(eval|assert|create_function)\s*\('
+
+  - id: ws-assert-post
+    name: assert 执行外部输入
+    severity: critical
+    score: 90
+    category: 一句话
+    mode: any
+    patterns:
+      - '@?assert\s*\(\s*\$'
+      - '@?assert\s*\(\s*[\x27"]'
+
+  - id: ws-preg-replace-e
+    name: preg_replace /e 修饰符代码执行
+    severity: high
+    score: 70
+    category: 隐藏后门
+    mode: all
+    patterns:
+      - 'preg_replace\s*\(\s*[\x27"][^\x27"]*[\x27"]\s*e'
+      - '\\$_(POST|GET|REQUEST)|str_replace|base64_decode'
+
+  - id: ws-create-function
+    name: create_function 动态函数
+    severity: high
+    score: 65
+    category: 隐藏后门
+    mode: any
+    patterns:
+      - 'create_function\s*\('
+      - 'preg_replace_callback\s*\([^,]{1,80},\s*[\x27"]create_function'
+
+  - id: ws-cmd-exec
+    name: 命令执行函数收外部变量
+    severity: critical
+    score: 90
+    category: 命令执行
+    mode: any
+    patterns:
+      - '(system|exec|shell_exec|passthru|popen|proc_open|pcntl_exec)\s*\(\s*\$_(POST|GET|REQUEST|COOKIE)'
+      - '(system|exec|shell_exec|passthru)\s*\(\s*\$\w+\s*\)\s*;.*\$_(POST|GET|REQUEST)'
+      - '`[^`\n]{0,60}\$_(POST|GET|REQUEST)[^`\n]{0,60}`'
+
+  - id: ws-file-write
+    name: 文件写入型后门（收外部变量）
+    severity: high
+    score: 75
+    category: 隐藏后门
+    mode: any
+    patterns:
+      - 'file_put_contents\s*\(\s*[^,]{1,80},\s*\$_(POST|GET|REQUEST)'
+      - 'fwrite\s*\(\s*\$?\w+\s*,\s*\$_(POST|GET|REQUEST)'
+      - 'move_uploaded_file\s*\([^)]*\$_(FILES)'
+
+  - id: ws-behinder
+    name: 冰蝎 Behinder 特征
+    severity: critical
+    score: 95
+    category: 冰蝎
+    mode: all
+    patterns:
+      - '(openssl_decrypt|openssl_encrypt|substr\s*\(\s*\$payload|md5\s*\(\s*\$payload)'
+      - '(eval|assert|base64_decode|gzinflate)\s*\('
+      - '(\$_SESSION\[|session_start)'
+
+  - id: ws-godzilla
+    name: 哥斯拉 Godzilla 特征
+    severity: critical
+    score: 95
+    category: 哥斯拉
+    mode: all
+    patterns:
+      - '(\$\\w+\\s*=\\s*[\x27"][A-Za-z0-9+/=]{16,}[\x27"])|(base64_decode\s*\(\s*[\x27"][A-Za-z0-9+/=]{24,})'
+      - '(eval|assert)\s*\('
+      - '(\\x[0-9a-fA-F]{2}){6,}'
+
+  - id: ws-antsword
+    name: 蚁剑 AntSword 特征
+    severity: high
+    score: 80
+    category: 蚁剑
+    mode: all
+    patterns:
+      - '(@?ini_set\s*\(\s*[\x27"]display_errors|set_time_limit\s*\(\s*0)'
+      - '(chr\s*\(\s*\d+\s*\)\s*\.\s*chr\s*\(|\$_\s*=\s*[\x27"]\w+[\x27"])'
+      - '(eval|assert)\s*\('
+
+  - id: ws-no-letter
+    name: 无字母 / 异或混淆木马
+    severity: high
+    score: 85
+    category: 编码混淆
+    mode: all
+    patterns:
+      - '\$\{?[\x27"]_\d*[\x27"]?\s*\}|\$__\s*=|\[\]\s*\.\s*\[\]'
+      - '(\^|\|)\s*[\x27"][^\x27"]{1,8}[\x27"]\s*;'
+      - '(eval|assert|call_user_func)\s*\('
+
+  - id: ws-hex-obfuscation
+    name: 十六进制密集混淆
+    severity: medium
+    score: 45
+    category: 编码混淆
+    mode: any
+    patterns:
+      - '(\\x[0-9a-fA-F]{2}){12,}'
+      - '[\x27"][A-Za-z0-9+/]{200,}={0,2}[\x27"]'
+
+  - id: ws-image-php
+    name: 图片马（图片头 + PHP 代码）
+    severity: critical
+    score: 90
+    category: 图片马
+    mode: all
+    patterns:
+      - '^(GIF8|\\x89PNG|\\xff\\xd8\\xff)'
+      - '<\?php'
+    exts: ['', '.jpg', '.png', '.gif', '.jpg.php', '.png.php']
+
+  - id: ws-reverse-shell
+    name: 反弹 Shell
+    severity: critical
+    score: 90
+    category: 命令执行
+    mode: any
+    patterns:
+      - '/dev/tcp/\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}/\d+'
+      - 'bash\s+-i\s+>&'
+      - '(nc|ncat|socat)\s+(-e|--exec)'
+      - 'fsockopen\s*\([^)]*\)[\s\S]{0,200}(exec|system|shell_exec)'
+
+  - id: ws-eval-encoded-var
+    name: eval 执行变量（非字面量）
+    severity: medium
+    score: 50
+    category: 隐藏后门
+    mode: any
+    patterns:
+      - 'eval\s*\(\s*\$[A-Za-z_]\w*\s*\)'
+      - 'assert\s*\(\s*\$[A-Za-z_]\w*\s*\)'
+
+  - id: ws-double-extension-write
+    name: 双扩展名 / .user.ini 劫持
+    severity: high
+    score: 70
+    category: 隐藏后门
+    mode: any
+    patterns:
+      - 'auto_prepend_file\s*='
+      - 'auto_append_file\s*='
+
+  - id: ws-superglobal-loop
+    name: 超全局变量批量注册（register 型后门）
+    severity: medium
+    score: 55
+    category: 隐藏后门
+    mode: all
+    patterns:
+      - 'foreach\s*\(\s*\$_(POST|GET|REQUEST|COOKIE)\s+as'
+      - '(\$\$|extract\s*\(|parse_str\s*\()'
+
+# 文件级启发式（不看内容语义，只看文件本身特征）
+# 这些规则写在引擎里，这里只是把阈值列出来，方便你知道默认口径；
+# 想调整请改 ctfops/webscan.py 里的 scan_text()。
+#
+# fh-tiny-eval        文件 < 200 字节且含 eval/assert       +60  high
+# fh-long-line        存在 > 3000 字符的单行                +30  medium
+# fh-recent-write     24 小时内被修改                       +15  low
+# fh-world-writable   权限 777                              +25  medium

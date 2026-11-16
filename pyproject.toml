@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ctf-ops"
+version = "1.0.0"
+description = "CTF / AWD 作战辅助系统：SSH 运维、备份、扫描、批量利用、自动交 flag、日志与流量分析"
+requires-python = ">=3.10"
+dependencies = [
+  "paramiko>=3.4.0",
+  "typer>=0.12.0",
+  "rich>=13.7.0",
+  "requests>=2.31.0",
+  "PyYAML>=6.0.1",
+]
+
+[project.optional-dependencies]
+shots = ["playwright>=1.40"]
+
+[project.scripts]
+ops = "ctfops.cli:app"
+
+[tool.setuptools.packages.find]
+include = ["ctfops*"]
+
+[tool.setuptools.package-data]
+"ctfops.agents" = ["*.php", "bin/*", "wafgo/*.go", "wafgo/go.mod"]

@@ -1,0 +1,36 @@
+# 靶机清单：一套配置打多场，改这里即可
+targets:
+  - name: web-01
+    host: 10.16.0.73
+    ssh_port: 22
+    user: root
+    password: ${T_PWD_1:-}
+    key_file: ~/.ssh/id_rsa
+    web:
+      - http://10.16.0.73
+      - http://10.16.0.73:8080
+    webroot: /var/www/html
+    tags: [web, php]
+    note: "政务门户，ThinkPHP"
+    db:
+      type: mysql
+      user: root
+      password: ""
+      database: "portal"
+
+  - name: web-02
+    host: 10.16.2.101
+    user: root
+    password: ${T_PWD_2:-}
+    web:
+      - http://10.16.2.101
+    tags: [web]
+    note: "备用靶机"
+
+  - name: pwn-01
+    host: 10.16.0.11
+    user: ctf
+    password: ${T_PWD_3:-}
+    web: []
+    tags: [pwn]
+    note: "无 Web，只做 SSH 运维与 flag 检索"

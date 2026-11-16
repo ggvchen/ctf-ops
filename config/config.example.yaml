@@ -1,0 +1,133 @@
+# ============================================================
+# ctf-ops 主配置
+# 复制为 config/config.yaml 后修改；支持 ${ENV} 与 ${ENV:-默认值}
+# ============================================================
+
+name: "2026-XX 网络安全竞赛"
+mode: awd                     # awd | ctf（仅影响报告措辞与默认流程）
+
+# 靶机写在单独文件，便于一套配置打多场
+# 每台靶机用 role 区分：defense = 我方靶机（备份/WAF/日志），attack = 攻击目标（扫描/利用/重放）
+targets_file: targets.yaml
+targets: []
+
+# ---------------- SSH 默认凭据（会被每台靶机继承） ----------------
+ssh:
+  user: root
+  password: ${TARGET_PASSWORD:-}      # 建议用环境变量，别把口令写进 git
+  key_file: ${TARGET_KEY:-~/.ssh/id_rsa}
+  port: 22
+  timeout: 12
+  banner_timeout: 15
+  allow_agent: true
+  look_for_keys: true
+
+# ---------------- 本地 AI（OpenAI 兼容） ----------------
+ai:
+  enabled: true
+  # Ollama: http://127.0.0.1:11434/v1
+  # LM Studio: http://127.0.0.1:1234/v1（模型名就用 LM Studio 里显示的那个 id）
+  base_url: http://127.0.0.1:11434/v1     # Ollama 默认；LM Studio 用 :1234/v1
+  model: qwen2.5:7b                       # 建议 7B 以上；代码审计可用 qwen2.5-coder
+  api_key: not-needed
+  timeout: 120
+  temperature: 0.2
+  max_tokens: 1600
+
+# ---------------- 扫描 ----------------
+scan:
+  nmap: nmap
+  nuclei: nuclei
+  nmap_top_ports: "1-10000"          # 想快可改 1-1000 或 --top-ports
+  nuclei_severity: critical,high,medium
+  # 全量 nuclei 模板有 1.1 万个，扫单站要几分钟；按标签收敛到 CTF 常见类型
+  # 想跑全量就把它置空，或命令行 --tags cve
+  nuclei_tags: cve,rce,sqli,lfi,upload,default-login,exposure,thinkphp,fastjson,shiro,weblogic,struts,spring
+  nuclei_extra_args: ["-stats", "-no-color"]
+  http_timeout: 8
+  workers: 8
+
+# ---------------- FLAG 提交 ----------------
+# mode: generic_http 用下面的模板；mode: manual 写 outbox 人工粘贴
+submit:
+  mode: manual
+  url: ""                             # 如 https://platform/api/flag
+  method: POST
+  # 占位符可用 {flag} {target} {host} {token}
+  json_body:
+    flag: "{flag}"
+    token: "{token}"
+  # form_body:          # 表单式平台用这个，与 json_body 二选一
+  #   flag: "{flag}"
+  headers:
+    Content-Type: application/json
+    # Cookie: "session={token}"
+  token: ${FLAG_TOKEN:-}
+  success_key: success               # 响应 JSON 中判断成功的字段，支持 a.b 形式
+  success_value: true
+  message_key: message
+  interval: 1.0                      # 提交间隔，防平台风控
+  retries: 3
+  timeout: 15
+
+# ---------------- FLAG 匹配规则 ----------------
+flag_patterns:
+  - 'flag\{[^}\r\n]{1,200}\}'
+  - 'FLAG\{[^}\r\n]{1,200}\}'
+  - 'ctf\{[^}\r\n]{1,200}\}'
+  - 'dasctf\{[^}\r\n]{1,200}\}'
+  - '[A-Za-z0-9_]{2,20}\{[0-9a-f]{16,64}\}'
+
+# ---------------- flag 服务器（经靶机去问） ----------------
+# 很多比赛的 flag 接口只在内网开放，本机直连不到，只能 SSH 上靶机 curl。
+# 页面「靶机 → 接口配置」保存的配置会覆盖这里（存进库，优先级更高）。
+# 占位符：{token} 原样、{token_url} 做 URL 编码、{ip} {host} {name} 按靶机替换。
+flagserver:
+  enabled: true
+  mode: http                          # http | cmd（平台给的是 ./readflag 这种就用 cmd）
+  url: ""                             # 如 http://10.10.0.1/api/flag?token={token_url}&host={ip}
+  method: GET
+  headers: {}                         # 如 {"X-Token": "{token}"}
+  body: ""                            # POST 内容，同样支持占位符
+  field: ""                           # 响应 JSON 里 flag 的位置，如 data.flag；留空=正则扫全文
+  cmd: ""                             # mode=cmd 时用，如 ./readflag
+  token: ${FLAG_TOKEN:-}              # 本队 token；留空则用 token_cmd 从靶机读
+  token_cmd: "cat /flag_token 2>/dev/null || cat /token 2>/dev/null"
+  scope: defense                      # defense | attack | all
+  tool: auto                          # auto | curl | wget | python3
+  timeout: 10
+  workers: 6
+  submit_after: true                  # 拉到就提交
+
+# ---------------- 备份 ----------------
+backup:
+  # 备份落盘目录：留空 = workdir/backups；可写外置盘绝对路径
+  # 页面「备份」里改会覆盖这里（存在 DB settings 表）
+  path: ""
+  excludes:
+    - "node_modules"
+    - "*.log"
+    - "cache"
+    - ".git"
+  db:
+    type: mysql
+    user: root
+    password: ""
+    database: ""            # 留空自动猜
+
+# ---------------- 日志/flag 检索范围 ----------------
+log_roots:
+  - /var/www
+  - /var/log
+  - /tmp
+  - /dev/shm
+  - /home
+  - /root
+  - /flag
+  - /flag.txt
+
+# ---------------- 插件运行时可选参数 ----------------
+ssh_users: [root, admin, www, ubuntu]
+ssh_passwords: [root, 123456, admin, password, P@ssw0rd]
+redis_escalate: false
+redis_pubkey: ""
