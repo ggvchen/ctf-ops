@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 import pathlib
 import posixpath
+import re
 import tarfile
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
@@ -30,7 +31,11 @@ class BackupResult:
     source: str = ""          # 实际打包的远端目录
 
 
-DEFAULT_EXCLUDES = ["cache", "*.log", "*.tmp", "node_modules/.cache", "*.swp",
+# 注意要带 */ 前缀：tar 的 --exclude 匹配的是成员全名（html/data/runtime），
+# 只写 runtime 是匹配不上的，排除等于没写
+DEFAULT_EXCLUDES = ["*/cache", "*/runtime", "*/session_*", "cache", "runtime",
+                    "*.log", "*.tmp",
+                    "node_modules/.cache", "*.swp",
                     "proc", "sys", "dev", ".git/objects",
                     "._*", ".DS_Store", "__MACOSX"]
 
@@ -119,39 +124,85 @@ def backup_target(cfg: Config, target: Target, dest_dir: Optional[pathlib.Path] 
                 return BackupResult(target.name, False, source=webroot,
                                     note=f"源路径是文件不是目录: {webroot}")
 
-            excludes = cfg.backup.get("excludes") or _DEFAULTS
+            # 默认排除项永远生效，配置里的只做追加：
+            # 以前 `cfg.backup.excludes or _DEFAULTS` 会让配置一填就把
+            # runtime/session 这些"一直在写"的目录漏掉，tar 必然报 Permission denied
+            excludes = list(_DEFAULTS)
+            for e in (cfg.backup.get("excludes") or []):
+                if e not in excludes:
+                    excludes.append(e)
             exc = " ".join(f"--exclude={_sh.quote(e)}" for e in excludes)
             parent = posixpath.dirname(webroot.rstrip("/")) or "/"
             base_name = posixpath.basename(webroot.rstrip("/"))
+            # tar 的退出码：0 正常，1 = "打包时有文件变了"（会话/缓存一直在写），
+            # 2 = 真错误。以前用 `&& echo TAR_OK`，rc=1 就被当成失败 —— 现场表现为
+            # "明明备了却报远端打包失败"。
+            errfile = f"/tmp/{base}.tar.err"
             tar_cmd = (f"tar czf {remote_tar} {exc} -C {_sh.quote(parent)} "
-                       f"{_sh.quote(base_name)} 2>/dev/null && echo TAR_OK; "
+                       f"{_sh.quote(base_name)} 2>{errfile}; "
+                       f"echo TAR_RC=$?; head -c 300 {errfile} 2>/dev/null; echo; "
                        f"ls -l {remote_tar} 2>/dev/null | awk '{{print $5}}'")
             r = sess.exec(tar_cmd, timeout=600, sudo=True)
-            if "TAR_OK" not in (r.out or ""):
+            out = r.out or ""
+            if "TAR_RC=" not in out:
                 # sudo 失败时再裸跑一次（很多比赛镜像本来就是 root）
-                r = sess.exec(tar_cmd.replace("2>/dev/null", ""), timeout=600)
-            if "TAR_OK" not in (r.out or ""):
+                r = sess.exec(tar_cmd, timeout=600)
+                out = r.out or ""
+            m = re.search(r"TAR_RC=(\d+)", out)
+            if not m:
                 return BackupResult(target.name, False, source=webroot,
-                                    note=f"远端打包失败: {(r.error or r.err or r.out)[:200]}")
+                                    note=f"远端打包失败: {(r.error or r.err or out)[:200]}")
+            rc = int(m.group(1))
+            size = 0
+            for tok in reversed(out.replace("TAR_RC=" + str(rc), " ").split()):
+                if tok.isdigit():
+                    size = int(tok)
+                    break
+            if rc not in (0, 1) or size <= 0:
+                tail = out.split("TAR_RC=", 1)[-1][:200]
+                return BackupResult(target.name, False, source=webroot,
+                                    note=f"远端打包失败(rc={rc}, {size}B): {tail}")
+            note_warn = ("tar 警告：打包期间有文件变动（会话/缓存），包仍可用"
+                         if rc == 1 else "")
 
+            db_note = ""
             if with_db:
-                db_cfg = target.db or cfg.backup.get("db") or {}
-                if db_cfg.get("type") == "mysql":
-                    user = db_cfg.get("user", "root")
-                    pwd = db_cfg.get("password", "")
-                    dbn = db_cfg.get("database") or _guess_db(sess)
+                db_cfg = dict(target.db or cfg.backup.get("db") or {})
+                if (db_cfg.get("type") or "mysql") == "mysql":
                     dump = f"/tmp/{base}.sql"
-                    pw = f"-p{_sh.quote(pwd)}" if pwd else ""
-                    sess.exec(f"mysqldump -u{user} {pw} {dbn} > {dump} 2>/dev/null "
-                              f"|| mysqldump -u{user} {pw} --all-databases > {dump}",
-                              timeout=600)
-                    if sess.exists(dump):
+                    base_db = db_cfg.get("database") or _guess_db(sess)
+                    cands = [(db_cfg.get("user") or "root",
+                              db_cfg.get("password") or "", base_db)]
+                    app = _app_db_conf(sess, webroot)
+                    if app.get("database"):
+                        cands.append((app.get("user") or "root",
+                                      app.get("password") or "", app["database"]))
+                    # 比赛镜像里 root:root / root 空口令都很常见，兜底试一下
+                    cands += [("root", "root", base_db), ("root", "", base_db)]
+                    sql_size = 0
+                    tried = set()
+                    for (u, p, d) in cands:
+                        if (u, p, d) in tried:
+                            continue
+                        tried.add((u, p, d))
+                        pw = f"-p{_sh.quote(p)}" if p else ""
+                        sess.exec(f"mysqldump -u{_sh.quote(u)} {pw} {_sh.quote(d)} "
+                                  f"> {dump} 2>/dev/null", timeout=600)
+                        size_out = (sess.exec(f"wc -c < {dump} 2>/dev/null").out or "").strip()
+                        sql_size = int(size_out) if size_out.isdigit() else 0
+                        if sql_size > 0:
+                            break
+                    if sql_size > 0:
                         local_sql = dest / f"{base}.sql"
                         sess.download(dump, str(local_sql), timeout=600)
                         sess.exec(f"rm -f {dump}")
                         if local_sql.exists():
                             console.print(f"  [dim]MySQL 备份: {local_sql.name} "
                                           f"{human_size(local_sql.stat().st_size)}[/dim]")
+                    else:
+                        # 空 dump 说"成功"是最坑的：回滚时才发现没数据
+                        db_note = "MySQL 备份为空（凭据不对？检查 backup.db 或靶机 database.php）"
+                        console.print(f"  [yellow]! {db_note}[/yellow]")
 
             if not sess.download(remote_tar, str(local_tar), timeout=900):
                 return BackupResult(target.name, False, note="回传失败")
@@ -159,7 +210,11 @@ def backup_target(cfg: Config, target: Target, dest_dir: Optional[pathlib.Path] 
             size = local_tar.stat().st_size
             digest = sha256_file(local_tar)
             return BackupResult(target.name, True, str(local_tar), remote_tar,
-                                size, digest, note=f"webroot={webroot}", source=webroot)
+                                size, digest,
+                                note=f"webroot={webroot}"
+                                     + (f"；{note_warn}" if note_warn else "")
+                                     + (f"；{db_note}" if db_note else ""),
+                                source=webroot)
     except Exception as e:  # noqa: BLE001
         return BackupResult(target.name, False, note=str(e))
 
@@ -206,6 +261,37 @@ def _skip_cache(ti: tarfile.TarInfo) -> Optional[tarfile.TarInfo]:
     if any(part in bad for part in ti.name.split("/")):
         return None
     return ti
+
+
+_APP_DB_FILES = ["application/database.php", "config/database.php",
+                 "data/conf/database.php", "config/conf/database.php",
+                 "config.inc.php", "wp-config.php"]
+
+
+def _app_db_conf(sess: SSHSession, webroot: str = "") -> Dict[str, str]:
+    """从 CMS 自己的配置里抠数据库凭据 —— 备份时 config.yaml 常常没填。"""
+    import re as _re
+    for root in [webroot] + ["/var/www/html", "."]:
+        if not root:
+            continue
+        for rel in _APP_DB_FILES:
+            txt = sess.read_file(posixpath.join(root.rstrip("/"), rel)) or ""
+            if not txt or "password" not in txt.lower():
+                continue
+
+            def grab(*keys: str) -> str:
+                for k in keys:
+                    m = _re.search(
+                        r"['\"]?" + k + r"['\"]?\s*(?:=>|=)\s*['\"]([^'\"]*)['\"]", txt)
+                    if m and m.group(1):
+                        return m.group(1)
+                return ""
+
+            db = grab("database", "DB_NAME", "DB_DATABASE")
+            if db:
+                return {"database": db, "user": grab("username", "DB_USER") or "root",
+                        "password": grab("password", "DB_PASSWORD")}
+    return {}
 
 
 def _guess_db(sess: SSHSession) -> str:

@@ -67,10 +67,12 @@ class FileResult:
     verdict: str = "clean"      # clean / suspicious / malicious
     hits: List[Hit] = field(default_factory=list)
     error: str = ""
+    original: bool = False      # 时间戳与安装基线一致：原版框架文件，命中规则大概率是误报
 
     def to_dict(self) -> Dict[str, Any]:
         return {"path": self.path, "size": self.size, "score": self.score,
                 "verdict": self.verdict, "error": self.error,
+                "original": self.original,
                 "hits": [h.to_dict() for h in self.hits]}
 
 
@@ -325,11 +327,11 @@ def scan_text(name: str, text: str, rules: List[Dict[str, Any]],
         res.hits.append(Hit("fh-recent-write", "24 小时内被修改", "low", 15,
                             "启发", 0, time.strftime("%m-%d %H:%M", time.localtime(float(mtime)))))
 
-    _finalize(res)
+    _finalize(res, meta)
     return res
 
 
-def _finalize(res: FileResult) -> None:
+def _finalize(res: FileResult, meta: Optional[Dict[str, Any]] = None) -> None:
     # 同一规则多条命中：只留一条（分数不叠加，否则循环里的马会爆表），
     # 但把命中次数记在 count 上——"只出现 1 次"和"遍布全文"是不同信号
     merged: Dict[str, Hit] = {}
@@ -345,6 +347,24 @@ def _finalize(res: FileResult) -> None:
                 h.count = prev_count
     res.hits = list(merged.values())
     res.score = min(100, sum(h.score for h in res.hits))
+    meta = meta or {}
+
+    # 原版文件降级：线上 CMS 的核心代码本来就含 eval/base64_decode 之类，
+    # 两条规则一叠就过 70 分 —— 实战里 1830 个文件报 39 个"后门"，全是误报。
+    # 判据：mtime 早于/等于安装基线（= 全站最早 mtime）就认为不是后加的。
+    base = meta.get("baseline")
+    mt = meta.get("mtime")
+    # 只在"原版时间 + 大文件 + 没有强特征"三条同时成立时才降级：
+    # 真后门要么很小（一句话），要么单条规则就够 90 分，不会被误降。
+    strong = any(h.score >= 90 for h in res.hits)
+    if (base and mt and float(mt) <= float(base) + 86400
+            and res.size > 6000 and not strong):
+        res.original = True
+        res.score = min(res.score, 39)
+    if meta.get("generated"):
+        res.original = True          # 编译产物，不是源码
+        res.score = min(res.score, 39)
+
     if res.score >= 70:
         res.verdict = "malicious"
     elif res.score >= 40:
@@ -385,6 +405,24 @@ def scan_path(cfg: Config, root: os.PathLike | str, max_files: int = MAX_FILES,
         candidates = [root_p]
 
     name_patterns = [re.compile(p) for p in extra.get("names") or []]
+
+    # 安装基线：全站最早的 mtime。镜像里原版文件都是同一时间落盘的，
+    # 攻击者后加的 webshell 一定比它新 —— 用它把"框架自带的 eval"和"真后门"分开。
+    baseline = 0.0
+    try:
+        if not isinstance(candidates, (list, tuple)):
+            candidates = list(candidates)
+        mts = []
+        for _f in candidates[:max_files]:
+            try:
+                mts.append(_f.stat().st_mtime)
+            except OSError:
+                continue
+        if len(mts) >= 5:            # 单文件/文件太少时不做基线判定
+            baseline = min(mts)
+    except Exception:  # noqa: BLE001
+        baseline = 0.0
+
     try:
         for p in candidates:
             if rep.files >= max_files:
@@ -419,8 +457,13 @@ def scan_path(cfg: Config, root: os.PathLike | str, max_files: int = MAX_FILES,
                 rel = str(p.relative_to(base_for_rel))
             except ValueError:
                 rel = p.name
+            # 模板缓存产物：编译结果是 "<?php //000.. exit();?> + 序列化数据"，
+            # 不是可执行后门，别占"恶意"名额（攻击者真放 shell 不会长这样）
+            cache_like = (b"exit();?>" in raw[:120] or b"//000000000000" in raw[:60]) \
+                and (b"a:" in raw[:400] or b"\x00" not in raw[:64])
             res = scan_text(rel, text, rules,
-                            {"mode": st.st_mode, "mtime": st.st_mtime})
+                            {"mode": st.st_mode, "mtime": st.st_mtime,
+                             "baseline": baseline, "generated": bool(cache_like)})
             rep.files += 1
             if res.verdict == "malicious":
                 rep.malicious += 1

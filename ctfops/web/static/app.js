@@ -1392,6 +1392,7 @@
         + '<option value="all">all · 全部插件</option>';
       if (cur) sel.value = cur;
       updatePluginDesc();
+      fillAutoPlugins(plugins.map((p) => p.name));
     } catch (e) { fail(e); }
   }
 
@@ -2121,15 +2122,33 @@
 
 
   /* --------------------------------------------------- 定时作战 + AI 排序 */
+  function fillAutoPlugins(names) {
+    const sel = $('#autoPlugins');
+    if (!sel || sel.dataset.built) return;
+    sel.dataset.built = '1';
+    sel.innerHTML = '<option value="">全部插件</option>' +
+      (names || []).map((n) => `<option value="${esc(n)}">${esc(n)}</option>`).join('');
+    // 选项是后到的：建好之后要把当前生效的插件重新选上，否则显示"全部"误导
+    if (S.autoLoop && S.autoLoop.plugins && S.autoLoop.plugins.length) {
+      sel.value = S.autoLoop.plugins[0];
+    }
+  }
+
   function renderAutoLoop(st) {
     const pill = $('#autoLoopPill');
     if (!pill) return;
+    if (st.plugins && st.plugins.length && $('#autoPlugins')) {
+      $('#autoPlugins').value = st.plugins[0];
+    }
     if (st.running) {
       pill.className = 'pill ok';
       pill.textContent = `定时中 · 第 ${st.rounds} 轮`;
       $('#btnAutoLoopStart').disabled = true;
       $('#btnAutoLoopStop').disabled = false;
-      $('#autoLoopNext').textContent = `${fmtDur(st.next_in)}后下一轮`;
+      const last = (st.logs || []).slice(-1)[0];
+      $('#autoLoopNext').textContent = `${fmtDur(st.next_in)}后下一轮`
+        + (st.plugins && st.plugins.length ? ` · 插件 ${st.plugins.join(', ')}` : ' · 全部插件')
+        + (last ? ` · ${last.ts} ${last.msg}` : '');
       const sel = $('#autoInterval');
       if (st.interval && [...sel.options].some((o) => o.value === String(st.interval))) {
         sel.value = String(st.interval);
@@ -2362,9 +2381,11 @@
     // 定时自动作战
     $('#btnAutoLoopStart').onclick = async () => {
       try {
+        const one = $('#autoPlugins') ? $('#autoPlugins').value : '';
         const st = await api('/api/auto/schedule/start', { method: 'POST', body: {
           interval: Number($('#autoInterval').value) || 900,
           phases: ['defense', 'attack', 'submit'],
+          plugins: one ? [one] : [],
         } });
         toast(`定时作战已启动：每 ${fmtDur(st.interval)} 一轮`, 'ok');
         renderAutoLoop(st);

@@ -63,6 +63,11 @@ class AppState:
         self.rounds = None          # 轮次监控器，延迟创建
         self.autoloop = None        # 定时自动作战，延迟创建
         self._lock = threading.Lock()
+        # 上次开着的定时自动作战，重启后接回来（进程挂了不该让定时悄悄停摆）
+        try:
+            self.auto_loop.restore()
+        except Exception:  # noqa: BLE001
+            pass
         self.started_at = time.time()
         self.started_at_iso = time.strftime("%Y-%m-%d %H:%M:%S",
                                             time.localtime(self.started_at))

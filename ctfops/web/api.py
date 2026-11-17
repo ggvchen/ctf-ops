@@ -2555,7 +2555,11 @@ def auto_schedule_start(app, p, q, b):
         raise ValueError("间隔过大，确认单位是秒")
     # 注意别用 `or None`：空数组会变成 None，"传了空阶段"就被当成"没传"
     phases = b.get("phases") if "phases" in b else None
-    st = app.auto_loop.start(interval=interval, phases=phases)
+    # 插件白名单：空数组表示"全部"，但至少别把 [] 变成 None 而误判成没传
+    plugins = b.get("plugins") if "plugins" in b else None
+    if isinstance(plugins, str):
+        plugins = [x.strip() for x in plugins.split(",") if x.strip()]
+    st = app.auto_loop.start(interval=interval, phases=phases, plugins=plugins)
     app.store.event("action", target="-", title=f"启动定时自动作战（{interval}s）",
                     data={"phases": st["phases"]})
     return 200, st

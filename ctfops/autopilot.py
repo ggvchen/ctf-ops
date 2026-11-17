@@ -403,13 +403,14 @@ class AutoPilot:
         return rep
 
     # ------------------------------------------------------------ 全流程
-    def run(self, phases: Sequence[str] = ("defense", "attack", "submit")) -> Dict[str, Any]:
+    def run(self, phases: Sequence[str] = ("defense", "attack", "submit"),
+            plugins: Optional[Sequence[str]] = None) -> Dict[str, Any]:
         t0 = time.time()
         out: Dict[str, Any] = {"phases": list(phases)}
         if "defense" in phases:
             out["defense"] = self.defend().to_dict()
         if "attack" in phases:
-            ar = self.attack()
+            ar = self.attack(plugins=plugins)
             out["attack"] = ar.to_dict()
             out["flags"] = ar.flags
         if "submit" in phases:
@@ -452,24 +453,73 @@ class AutoLoop:
         self.running = False
         self.interval = 300
         self.phases: List[str] = ["defense", "attack", "submit"]
+        self.plugins: List[str] = []          # 空 = 全部插件；比赛里通常只留命中的那个
         self.rounds = 0
         self.started = 0.0
         self.last_run = 0.0
         self.next_run = 0.0
         self.last_summary = ""
         self.last_error = ""
+        self.logs: List[Dict[str, str]] = []   # 最近若干条进度，页面能看见它卡在哪
+
+    SCHEDULE_KEY = "auto.schedule"
+
+    def _persist(self) -> None:
+        """把定时配置落库：进程重启 / 机器重启后还能接回来。"""
+        import json as _json
+        try:
+            self.store.set_setting(self.SCHEDULE_KEY, _json.dumps({
+                "enabled": self.running, "interval": self.interval,
+                "phases": self.phases, "plugins": self.plugins,
+                "rounds": self.rounds,
+            }, ensure_ascii=False))
+        except Exception:  # noqa: BLE001
+            pass
+
+    def restore(self) -> Optional[Dict[str, Any]]:
+        """启动时调用：上次开着就自动接回来，但先等 60 秒再打第一轮。"""
+        import json as _json
+        try:
+            raw = self.store.get_setting(self.SCHEDULE_KEY, "")
+            saved = _json.loads(raw) if raw else {}
+        except Exception:  # noqa: BLE001
+            return None
+        if not saved:
+            return None
+        self.interval = max(60, int(saved.get("interval") or self.interval))
+        phases = [x for x in (saved.get("phases") or []) if x in ("defense", "attack", "submit")]
+        if phases:
+            self.phases = phases
+        self.plugins = [x for x in (saved.get("plugins") or []) if isinstance(x, str)]
+        # 轮次数先还原：start() 会把它清零，所以只能在自己这边记着
+        self.rounds = int(saved.get("rounds") or 0)
+        if not saved.get("enabled") or not self.cfg.targets:
+            return None
+        self.start(self.interval, self.phases, self.plugins, first_delay=60)
+        self.rounds = int(saved.get("rounds") or 0)
+        self._persist()
+        return self.state()
+
+    def _log(self, msg: str, lv: str = "info") -> None:
+        self.logs.append({"ts": time.strftime("%H:%M:%S"), "level": lv,
+                          "msg": str(msg)[:300]})
+        del self.logs[:-200]
 
     def state(self) -> Dict[str, Any]:
         now = time.time()
         return {"running": self.running, "interval": self.interval,
-                "phases": self.phases, "rounds": self.rounds,
+                "logs": self.logs[-20:],
+                "phases": self.phases, "plugins": self.plugins,
+                "rounds": self.rounds,
                 "started": self.started,
                 "last_run": self.last_run,
                 "next_in": max(0, round(self.next_run - now, 1)) if self.running else 0,
                 "last_summary": self.last_summary,
                 "last_error": self.last_error}
 
-    def start(self, interval: int = 300, phases: Optional[List[str]] = None) -> Dict[str, Any]:
+    def start(self, interval: int = 300, phases: Optional[List[str]] = None,
+              plugins: Optional[Sequence[str]] = None,
+              first_delay: float = 0) -> Dict[str, Any]:
         import threading
         with self._lock:
             if self.running:
@@ -481,14 +531,17 @@ class AutoLoop:
                 if not picked:
                     raise ValueError("至少选一个阶段（defense / attack / submit）")
                 self.phases = picked
+            if plugins is not None:
+                self.plugins = [x for x in plugins if isinstance(x, str)]
             self.running = True
             self.rounds = 0
             self.started = time.time()
-            self.next_run = time.time()
+            self.next_run = time.time() + max(0.0, first_delay)
             self.last_error = ""
             self._stop.clear()
             self._thread = threading.Thread(target=self._loop, name="auto-loop", daemon=True)
             self._thread.start()
+            self._persist()
             return self.state()
 
     def stop(self) -> Dict[str, Any]:
@@ -496,26 +549,34 @@ class AutoLoop:
             self._stop.set()
             self.running = False
             self.next_run = 0
+        self._persist()
         return self.state()
 
     def _loop(self) -> None:
         import json as _json
+        # 重启恢复时先等一会儿，别一开机就对着 30 多台靶机猛打
+        delay = self.next_run - time.time()
+        if delay > 0 and self._stop.wait(delay):
+            return
         while not self._stop.is_set():
             try:
-                ap = AutoPilot(self.cfg, self.store, log=lambda m, lv="info": None)
-                report = ap.run(tuple(self.phases))
+                ap = AutoPilot(self.cfg, self.store, log=self._log)
+                report = ap.run(tuple(self.phases), plugins=self.plugins or None)
                 self.rounds += 1
                 self.last_run = time.time()
                 self.last_summary = summarize(report)
+                self._log(f"第 {self.rounds} 轮完成：{self.last_summary}", "ok")
                 report["summary_text"] = self.last_summary
                 self.store.set_setting("auto.last", _json.dumps(report, ensure_ascii=False))
                 self.store.event("action", target="-", title=f"定时自动作战 · 第 {self.rounds} 轮",
                                  data={"summary": self.last_summary})
             except Exception as e:  # noqa: BLE001
                 self.last_error = f"{type(e).__name__}: {e}"
+                self._log(f"本轮失败：{self.last_error}", "error")
                 self.store.event("action", target="-", title="定时自动作战失败",
                                  severity="high", data={"error": self.last_error})
             with self._lock:
                 self.next_run = time.time() + self.interval
+            self._persist()
             if self._stop.wait(self.interval):
                 break

@@ -581,3 +581,6 @@ details.report > summary::-webkit-details-marker { display: none; }
 details.report > summary::before { content: '▸ '; color: var(--tx-3); }
 details.report[open] > summary::before { content: '▾ '; }
 details.report > summary:hover { color: var(--accent); }
+
+/* 禁用态要看得出来：定时运行中"启动定时"仍是蓝的，容易以为能重复点 */
+.btn[disabled], .btn.ghost[disabled] { opacity: .45; cursor: not-allowed; }
