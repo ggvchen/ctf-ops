@@ -78,6 +78,19 @@ def main() -> int:
     check("路径穿越被记录", "traversal" in rules_hit, str(rules_hit))
     check("扫描器 UA 被记录", "scanner" in rules_hit, str(rules_hit))
     check("正常请求不误报", all(a["path"] != "/index.php" for a in audits))
+    # 规则不能宽到把 CMS 正常动态 URL 拦掉（曾用 ".php?x=" 导致整站 403）
+    import re as _re
+    _rules = {r["id"]: _re.compile(r["pattern"]) for r in DEFAULT_RULES}
+    _benign = ["/index.php?m=home&c=Lists&a=index&tid=2&sort=new&sort_asc=asc",
+               "/index.php?m=home&c=View&a=index&aid=89",
+               "/uploads/2024/0617/demo.jpg", "/login.php"]
+    for _u in _benign:
+        _hit = [k for k, v in _rules.items() if v.search(_u)]
+        check(f"正常 URL 不命中规则 {_u[:36]}", not _hit, str(_hit))
+    for _bad, _want in ((("/index.php?id=1&x=1,(SELECT 1 FROM (SELECT(SLEEP(2)))x)-- -"), "sqli"),
+                        ("/uploads/shell.php", "webshell"),
+                        ("/index.php?f=../../etc/passwd", "traversal")):
+        check(f"攻击 URL 命中 {_want}", bool(_rules[_want].search(_bad)), _bad[:40])
     check("monitor 模式不写封禁", not bans.exists() or not bans.read_text().strip())
     check("action 标为 monitor", all(a["action"] == "monitor" for a in audits))
 

@@ -46,8 +46,10 @@ DEFAULT_RULES: List[Dict[str, Any]] = [
      "pattern": r"(?i)(<script|%3cscript|onerror\s*=|onload\s*=|javascript:)", "action": "monitor"},
     {"id": "log4j", "name": "Log4j/JNDI", "severity": "critical", "scope": "any",
      "pattern": r"(?i)(\$\{jndi:|ldap://|rmi://)", "action": "monitor"},
+    # 只认典型的 shell 文件名，别用 ".php?x=" 这种宽泛特征 ——
+    # 那会把 index.php?m=home 这类正常动态 URL 全拦掉（enforce 下整站 403）
     {"id": "webshell", "name": "webshell 访问", "severity": "critical", "scope": "url",
-     "pattern": r"(?i)/(shell|cmd|c99|b374k|wso|upload)\.(php|jsp|aspx?)\b|\.(php|jsp)\?[a-z]{1,3}=", "action": "monitor"},
+     "pattern": r"(?i)/(shell|cmd|cmd2|c99|b374k|wso|r57|upload|tmp)\d*\.(php|jsp|aspx?|cer|phtml)\b", "action": "monitor"},
     {"id": "sensitive", "name": "敏感文件探测", "severity": "medium", "scope": "url",
      "pattern": r"(?i)(/\.git/|/\.svn/|/\.env|/\.DS_Store|/backup\.(zip|sql|tar|gz)|/www\.zip|/db\.sql)", "action": "monitor"},
     {"id": "scanner", "name": "扫描器 UA", "severity": "medium", "scope": "ua",
@@ -759,6 +761,10 @@ def stop(cfg: Config, target: Target, unban: bool = False) -> Dict[str, Any]:
 # 每条路径都会明确回报用了哪种、为什么失败，绝不静默。
 BAN_MARK = "# >>> ctf-ops ban (auto) >>>"
 BAN_MARK_END = "# <<< ctf-ops ban <<<"
+# 两个标记里有 ( ) > < 这些正则元字符，拼进 re 模式前必须转义，
+# 否则 `(auto)` 会被当成分组，"解封"实际一条都删不掉还报成功。
+BAN_BLOCK_RE = re.compile(
+    re.escape(BAN_MARK) + r".*?" + re.escape(BAN_MARK_END) + r"\n?", re.S)
 
 
 @dataclass
@@ -798,18 +804,32 @@ def detect_ban_caps(cfg: Config, target: Target, sess: Optional[SSHSession] = No
         sess = sess or SSHSession(target, cfg)
         if own:
             sess.__enter__()
-        script = (
-            'echo "UID=$(id -u)"\n'
-            'sudo -n true 2>/dev/null && echo SUDO=1 || echo SUDO=0\n'
-            'command -v iptables >/dev/null 2>&1 && echo IPT=1\n'
-            'command -v nft >/dev/null 2>&1 && echo NFT=1\n'
-            f'[ -f {PHP_AGENT_PATH} ] && echo PHPAGENT=1\n'
-            "ps -eo comm= 2>/dev/null | grep -E '^(nginx|apache2|httpd)$' | head -1 "
-            "| sed 's/^/SRV=/'\n"
-            'for w in "$WEBROOT"; do [ -n "$w" ] && [ -w "$w" ] && echo WEBROOT_W=1; done\n'
-            'grep -rls "AllowOverride[[:space:]]*All" /etc/apache2 /etc/httpd 2>/dev/null '
-            '| head -1 | sed "s/^/OVERRIDE=/"\n'
-        )
+        # 用三引号原样写 shell，避免多层引号转义把 ${} / $2 吃掉
+        script = f"""echo "UID=$(id -u)"
+sudo -n true 2>/dev/null && echo SUDO=1 || echo SUDO=0
+command -v iptables >/dev/null 2>&1 && echo IPT=1
+command -v nft >/dev/null 2>&1 && echo NFT=1
+[ -f {PHP_AGENT_PATH} ] && echo PHPAGENT=1
+ps -eo comm= 2>/dev/null | grep -E '^(nginx|apache2|httpd)$' | head -1 | sed 's/^/SRV=/'
+W="$WEBROOT"
+if [ -z "$W" ] || [ ! -d "$W" ]; then
+  W=$(grep -rhE "^[[:space:]]*DocumentRoot" /etc/apache2 /etc/httpd 2>/dev/null \
+      | head -1 | awk '{{print $2}}')
+fi
+if [ -z "$W" ] || [ ! -d "$W" ]; then
+  W=$(grep -rhE "^[[:space:]]*root[[:space:]]" /etc/nginx 2>/dev/null \
+      | head -1 | sed 's/;.*//' | awk '{{print $2}}')
+fi
+if [ -z "$W" ] || [ ! -d "$W" ]; then
+  for c in /var/www/html /usr/share/nginx/html /app/public; do
+    [ -d "$c" ] && {{ W="$c"; break; }}
+  done
+fi
+echo "WEBROOT=$W"
+[ -n "$W" ] && [ -w "$W" ] && echo WEBROOT_W=1
+grep -rls "AllowOverride[[:space:]]*All" /etc/apache2 /etc/httpd 2>/dev/null \
+  | head -1 | sed "s/^/OVERRIDE=/"
+"""
         webroot = (target.webroot or "").strip()
         if not webroot:
             try:
@@ -836,6 +856,8 @@ def detect_ban_caps(cfg: Config, target: Target, sess: Optional[SSHSession] = No
                 caps.php_agent = True
             elif line.startswith("SRV="):
                 caps.web_server = line[4:].strip()
+            elif line.startswith("WEBROOT="):
+                caps.webroot = line[8:].strip().strip('"\'')
             elif line == "WEBROOT_W=1":
                 caps.webroot_writable = True
             elif line.startswith("OVERRIDE="):
@@ -918,9 +940,13 @@ def ban(cfg: Config, target: Target, ips, backend: str = "auto") -> Dict[str, An
             elif pick == "htaccess":
                 path = posixpath.join(caps.webroot.rstrip("/"), ".htaccess")
                 old = sess.read_file(path) or ""
-                keep = re.sub(BAN_MARK + r".*?" + BAN_MARK_END + r"\n?", "", old, flags=re.S)
+                keep = BAN_BLOCK_RE.sub("", old)
                 lines = [ln for ln in keep.splitlines()]
-                block = [BAN_MARK] + [f"Require not ip {ip}" for ip in want] + [BAN_MARK_END]
+                # Apache 2.4 里 `Require not ip` 必须包在 <RequireAll> 里，
+                # 直接写在顶层是语法错误 —— 整站 500，比不封还惨。
+                block = ([BAN_MARK, "<RequireAll>", "    Require all granted"]
+                         + [f"    Require not ip {ip}" for ip in want]
+                         + ["</RequireAll>", BAN_MARK_END])
                 body = "\n".join(lines + block).strip("\n") + "\n"
                 if sess.write_file(path, body):
                     res["banned"] = want
@@ -964,9 +990,13 @@ def unban(cfg: Config, target: Target, ips=None) -> Dict[str, Any]:
                 path = posixpath.join(caps.webroot.rstrip("/"), ".htaccess")
                 old = sess.read_file(path) or ""
                 if BAN_MARK in old:
-                    sess.write_file(path, re.sub(
-                        BAN_MARK + r".*?" + BAN_MARK_END + r"\n?", "", old, flags=re.S))
-                    res["detail"].append(".htaccess 里的封禁段已移除")
+                    stripped = BAN_BLOCK_RE.sub("", old)
+                    if sess.write_file(path, stripped):
+                        res["detail"].append(
+                            ".htaccess 里的封禁段已移除" if stripped != old
+                            else ".htaccess 里有标记但内容没变，请人工确认")
+                    else:
+                        res["detail"].append(".htaccess 写入失败（权限？）")
             res["bans_left"] = list_bans(cfg, target).get("bans", [])
     except Exception as e:  # noqa: BLE001
         res["ok"] = False
