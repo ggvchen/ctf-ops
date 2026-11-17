@@ -80,7 +80,7 @@ jobs:
             nuclei -version
             sqlmap --version | head -1
             mysqldump --version
-            ./ops target list >/dev/null 2>&1 || true
+            ./ops targets list >/dev/null 2>&1 || true
           '
 
       - name: 打 tag 并推送
@@ -90,7 +90,7 @@ jobs:
           docker push "$IMG:${TAG}-${{ matrix.arch }}"
           # amd64 额外占用不带后缀的 tag，方便直接 pulll
           if [ "${{ matrix.arch }}" = "amd64" ]; then
-            docker tag "ctf-ops:${matrix.arch}" "$IMG:${TAG}"
+            docker tag "ctf-ops:${{ matrix.arch }}" "$IMG:${TAG}"
             docker push "$IMG:${TAG}"
           fi
 
