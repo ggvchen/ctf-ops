@@ -299,7 +299,10 @@
         btn.textContent = collapsed ? '⌄' : '⌃';
         btn.title = collapsed ? '展开' : '折叠';
       };
-      apply(localStorage.getItem(key) === '1');
+      // 没存过就用面板自带的默认值（大配置表单默认收起，别把列表顶到屏幕外）
+      const saved = localStorage.getItem(key);
+      const defCollapsed = panel.dataset.collapseDefault === '1';
+      apply(saved === null ? defCollapsed : saved === '1');
       btn.onclick = () => {
         const next = !panel.classList.contains('collapsed');
         apply(next);
@@ -319,8 +322,10 @@
     if (!el) return;
     if (S.selection[key] === undefined) {
       const role = ROLE_DEFAULT[key];
+      // 默认不选已禁用的靶机：选了也不会执行，只会让人困惑
       S.selection[key] = role
-        ? S.targets.filter((t) => (t.role || 'defense') === role).map((t) => t.name)
+        ? S.targets.filter((t) => (t.role || 'defense') === role && t.enabled !== false)
+            .map((t) => t.name)
         : [];
     }
     const sel = S.selection[key] || [];
@@ -328,19 +333,41 @@
       el.innerHTML = '<span class="muted sm">没有靶机，请先在「靶机」页添加</span>';
       return;
     }
+    // 39 台全铺开会把下面的按钮顶出首屏，默认只显示前 12 台 + 已选中的；
+    // 剩下的折成「还有 N 台」，点一下展开
+    const LIMIT = 12;
+    const expanded = el.dataset.expanded === '1';
+    let shown = S.targets;
+    let more = 0;
+    if (!expanded && S.targets.length > LIMIT) {
+      // 只铺前 12 台；默认是"全选攻击靶机"，若把已选中的也留住就等于没折叠
+      shown = S.targets.slice(0, LIMIT);
+      more = S.targets.length - shown.length;
+    }
+    const tail = more
+      ? `<span class="chip more" data-chip="__more">还有 ${more} 台`
+        + `${sel.length ? `（已选 ${sel.length}）` : ''}…</span>`
+      : (expanded && S.targets.length > LIMIT
+          ? '<span class="chip more" data-chip="__less">收起</span>' : '');
     el.innerHTML = `
       <span class="chip ${sel.length ? '' : 'on'}" data-chip="__all">全部
         <span class="cnt">${S.targets.length}</span></span>
-      ${S.targets.map((t) => `
-        <span class="chip ${sel.includes(t.name) ? 'on' : ''}" data-chip="${esc(t.name)}"
-              title="${esc(t.host)} · ${t.role === 'attack' ? '攻击目标' : '防守靶机'}${t.tags.length ? ' · ' + esc(t.tags.join(',')) : ''}">
+      ${shown.map((t) => `
+        <span class="chip ${sel.includes(t.name) ? 'on' : ''}${t.enabled === false ? ' off' : ''}"
+              data-chip="${esc(t.name)}"
+              title="${esc(t.host)} · ${t.role === 'attack' ? '攻击目标' : '防守靶机'}${t.enabled === false ? ' · 已禁用（不参与执行）' : ''}${(t.tags || []).length ? ' · ' + esc((t.tags || []).join(',')) : ''}">
           <i class="role ${t.role === 'attack' ? 'atk' : 'def'}">${t.role === 'attack' ? '攻' : '防'}</i>
           ${esc(t.name)}<span class="cnt">${esc(t.host)}</span>
-        </span>`).join('')}`;
+        </span>`).join('')}${tail}`;
     el.onclick = (ev) => {
       const chip = ev.target.closest('.chip');
       if (!chip) return;
       const v = chip.dataset.chip;
+      if (v === '__more' || v === '__less') {
+        el.dataset.expanded = v === '__more' ? '1' : '0';
+        renderChips(el, key, null);      // 只换展示，不动选择
+        return;
+      }
       const cur = S.selection[key] || [];
       if (v === '__all') S.selection[key] = [];
       else if (cur.includes(v)) S.selection[key] = cur.filter((x) => x !== v);
@@ -729,14 +756,21 @@
           <td class="cb"><input type="checkbox" class="tg-cb" data-name="${esc(t.name)}"></td>
           <td><span class="pill ${t.role === 'attack' ? 'attack' : 'defense'}">${t.role === 'attack' ? '攻击' : '防守'}</span></td>
           <td><b>${esc(t.name)}</b></td>
-          <td class="mono">${esc(t.host)}</td>
-          <td class="mono">${esc(t.user)}:${t.ssh_port}</td>
+          <td class="mono clip" title="${esc(t.host)}">${esc(t.host)}</td>
+          <td class="mono clip" title="${esc(t.user)}@${esc(t.host)}:${t.ssh_port}">${esc(t.user)}:${t.ssh_port}</td>
           <td>${t.auth === 'key' ? '<span class="pill info">密钥</span>' : t.auth === 'password' ? '<span class="pill warn">口令</span>' : '<span class="pill err">未配置</span>'}</td>
-          <td class="mono">${t.web.map(esc).join('<br>') || '—'}</td>
-          <td>${t.tags.map((x) => `<span class="pill info">${esc(x)}</span>`).join(' ') || '—'}</td>
+          <td class="mono clip" title="${esc((t.web || []).join('\n') || '无')}">${
+            t.web && t.web.length
+              ? esc(t.web[0]) + (t.web.length > 1 ? ` <span class="muted">+${t.web.length - 1}</span>` : '')
+              : '—'}</td>
+          <td class="clip" title="${esc((t.tags || []).join(', '))}">${
+            (t.tags || []).length
+              ? `<span class="pill info">${esc(t.tags[0])}</span>`
+                + (t.tags.length > 1 ? ` <span class="muted">+${t.tags.length - 1}</span>` : '')
+              : '—'}</td>
           <td><input class="tk-input ${tk ? 'set' : ''}" data-token="${esc(t.name)}" type="password"
                      placeholder="${tk ? '已设置' : '默认'}" title="flagserver 逐机 token，留空用全局 token"></td>
-          <td class="muted">${esc(t.note || '—')}</td>
+          <td class="muted clip" title="${esc(t.note || '')}">${esc(t.note || '—')}</td>
           <td><div class="row-actions">
             <button class="btn ghost xs" data-target-edit="${esc(t.name)}">编辑</button>
             <button class="btn ghost xs" data-target-del="${esc(t.name)}">删除</button>

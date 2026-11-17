@@ -82,7 +82,11 @@ main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .topbar .titles p { margin: 2px 0 0; font-size: 12.5px; color: var(--tx-3);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
-.chips { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.chips {
+  display: flex; flex-wrap: wrap; gap: 6px; align-items: center;
+  /* 数量改由 JS 折叠（前 12 台 + 还有 N 台），这里只做兜底，不再硬切高度 */
+  max-height: 240px; overflow-y: auto;
+}
 .chips .chip {
   display: inline-flex; align-items: center; gap: 6px;
   border: 1px solid var(--line-strong); background: #fff;
@@ -133,13 +137,18 @@ main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .panel {
   background: var(--panel); border: 1px solid var(--line);
   border-radius: var(--r); box-shadow: 0 1px 1px rgba(16,24,40,.02);
-  overflow: hidden;
+  /* 用 clip 而不是 hidden：hidden 会建立滚动容器，导致 .panel-head 的
+     position:sticky 只在本面板内生效，翻长列表时按钮照样被顶走 */
+  overflow: clip;
 }
 .panel-head {
   display: flex; align-items: center; justify-content: space-between; gap: 12px;
   padding: 12px 16px; border-bottom: 1px solid var(--line);
   background: linear-gradient(180deg, #fcfcfd, #fafbfc);
+  /* 吸顶：往下翻长列表时，筛选、按钮这些控件一直看得见 */
+  position: sticky; top: 0; z-index: 4;
 }
+.panel-head h2 { flex: 0 0 auto; }
 .panel-head h2 { margin: 0; font-size: 13px; font-weight: 600; letter-spacing: .1px; }
 .panel-body { padding: 14px 16px; }
 .panel-body.tight { padding: 0; }
@@ -231,7 +240,9 @@ code { font-family: var(--mono); font-size: 11.5px; background: var(--bg-soft); 
 .chips .chip .cnt { font-size: 10.5px; color: var(--tx-3); }
 
 /* ---------------- tables ---------------- */
-.table-wrap { overflow-x: auto; }
+/* 长列表在框内滚动，别把整页顶长：这样控件永远在首屏附近 */
+.table-wrap { overflow: auto; max-height: calc(100vh - 250px); }
+.table-wrap.short { max-height: 320px; }
 table.grid { width: 100%; border-collapse: collapse; font-size: 12.5px; }
 table.grid th {
   text-align: left; font-weight: 500; font-size: 11.5px; color: var(--tx-3);
@@ -584,3 +595,43 @@ details.report > summary:hover { color: var(--accent); }
 
 /* 禁用态要看得出来：定时运行中"启动定时"仍是蓝的，容易以为能重复点 */
 .btn[disabled], .btn.ghost[disabled] { opacity: .45; cursor: not-allowed; }
+
+/* ---------------------------------------------------- 列表永远排在控件后面
+   用 order 调整顺序，不动 DOM：详情/清单类面板排到最后，控件留在首屏。
+   （这几个页面原来是"清单在上、表单在下"，加靶机得先滚过 39 行） */
+.view { display: none; }
+.view.active { display: flex; }
+
+/* 靶机：接口配置 → 添加 → 批量添加 → 清单 */
+.view[data-view="targets"] > .panel:nth-child(1) { order: 9; }
+
+/* 防护：部署 → 状态 → 封禁 → 漏洞修补 → 攻击审计 → 漏洞库 → 重放 */
+.view[data-view="waf"] > .panel:nth-child(4) { order: 6; }   /* 攻击审计 */
+.view[data-view="waf"] > .panel:nth-child(5) { order: 4; }   /* 漏洞修补 */
+.view[data-view="waf"] > .panel:nth-child(6) { order: 7; }   /* 漏洞库 */
+
+/* 利用：批量利用 → AI 写插件 → 执行结果 */
+.view[data-view="exploit"] > .panel:nth-child(2) { order: 9; }  /* 执行结果 */
+.view[data-view="exploit"] > .panel:nth-child(3) { order: 5; }  /* AI 写插件 */
+.view[data-view="waf"] > .panel:nth-child(7) { order: 8; }   /* 重放结果 也靠后 */
+
+/* chip：已禁用 / 折叠入口 */
+.chips .chip.off { opacity: .45; }
+.chips .chip.off.on { opacity: .8; }
+.chips .chip.more { border-style: dashed; color: var(--tx-3); background: #fbfcfd; }
+.chips .chip.more:hover { color: var(--accent); border-color: var(--accent); }
+
+/* 折叠时给个提示，避免"配置项找不到了" */
+.panel.collapsed .fold-hint { display: inline; }
+.panel:not(.collapsed) .fold-hint { display: none; }
+
+/* 表格里的长地址/备注：单行省略，悬停看全文（否则一行能占四行高） */
+table.grid td.clip {
+  max-width: 230px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+table.grid td.clip + td { min-width: 0; }
+
+/* 总览：把"自动作战"提到动作区后面，别排在靶机 chip 和发现列表之后 */
+.view[data-view="overview"] > .panel:nth-child(5) { order: 1; }   /* 自动作战 */
+.view[data-view="overview"] > .panel:nth-child(3) { order: 4; }   /* 靶机（chip 列表） */
+.view[data-view="overview"] > .panel:nth-child(4) { order: 5; }   /* 最新发现 */

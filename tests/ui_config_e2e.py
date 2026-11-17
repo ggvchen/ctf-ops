@@ -114,6 +114,10 @@ def main() -> int:
             page.evaluate("location.hash = '#targets'")
             page.wait_for_timeout(700)
             check("接口配置面板存在", page.locator("#ifSubUrl").count() == 1)
+            # 大配置表单默认收起（让清单和主操作留在首屏），填之前先展开
+            if page.locator('.panel[data-collapse="iface-config"].collapsed').count():
+                page.click('.panel[data-collapse="iface-config"] [data-fold]')
+                page.wait_for_timeout(300)
             page.fill("#ifSubUrl", "http://platform.local/api/flag")
             page.select_option("#ifSubMethod", "POST")
             page.fill("#ifSubBody", '{"flag":"{flag}"}')
@@ -260,11 +264,20 @@ def main() -> int:
             page.wait_for_timeout(700)
             check("靶机页接口配置也能折叠",
                   page.locator(iface_panel + " [data-fold]").count() == 1)
+            # 上面 [1] 展开过，localStorage 里已记成"展开"；清掉再刷新才看得到默认值
+            page.evaluate("localStorage.removeItem('ctfops.fold.iface-config')")
+            page.reload(wait_until="networkidle")
+            page.wait_for_timeout(600)
+            page.evaluate("location.hash = '#targets'")
+            page.wait_for_timeout(700)
+            check("接口配置默认收起", page.locator(iface_panel + ".collapsed").count() == 1)
             page.click(iface_panel + " [data-fold]")
             page.wait_for_timeout(300)
-            check("接口配置折叠生效",
-                  not page.locator(iface_panel + " .panel-body").is_visible())
+            check("点一下能展开", page.locator(iface_panel + " .panel-body").is_visible())
             page.click(iface_panel + " [data-fold]")
+            page.wait_for_timeout(300)
+            check("再点一下收起",
+                  not page.locator(iface_panel + " .panel-body").is_visible())
 
             print("\n[8] 发现汇总：分页工具条")
             page.evaluate("location.hash = '#scan'")
