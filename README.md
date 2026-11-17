@@ -18,6 +18,57 @@ vim config/targets.yaml   # 填靶机 IP / 账号
 `./ops` 会自动使用项目内 `.venv`，首次运行自动装依赖。
 控制台和命令行操作**同一套数据**（`evidence/ops.db`），浏览器里点的每一步同样会入库、同样进报告。
 
+## Docker：一个镜像带走所有工具
+
+不想在靶场机器上装东西，用镜像跑：
+
+```bash
+# 本机构建（按当前架构）
+docker build -f docker/Dockerfile -t ctf-ops:latest .
+
+# 或者直接拉 GitHub Actions 构建好的
+docker pull ghcr.io/ggvchen/ctf-ops:latest        # amd64
+docker pull ghcr.io/ggvchen/ctf-ops:latest-arm64  # Apple Silicon / arm64 服务器
+```
+
+启动（8899 是控制台端口，三个卷分别是数据库/配置/备份）：
+
+```bash
+docker run -d --name ctf-ops -p 8899:8899 \
+  --cap-add=NET_RAW \
+  -v $PWD/ctf-data/evidence:/opt/ctf-ops/evidence \
+  -v $PWD/ctf-data/config:/opt/ctf-ops/config \
+  -v $PWD/ctf-data/backups:/opt/ctf-ops/backups \
+  ctf-ops:latest
+# 打开 http://127.0.0.1:8899
+```
+
+镜像里已经装好：`nmap` / `tshark` / `tcpdump` / `nuclei 3.x` / `sqlmap` / `nikto` /
+`mysqldump` / `ssh` / `curl` / `jq`，以及本项目虚拟环境（paramiko、typer、rich、PyYAML、
+python-evtx）。三个平台的 Go 版 WAF 二进制也在里面，`ops waf deploy` 直接可用。
+
+几个注意点：
+
+- **nmap 默认能跑**。Kali 的 nmap 带 `cap_net_admin,cap_net_raw` 文件能力，容器没给
+  NET_ADMIN 时 exec 会 EPERM；镜像里已去掉文件能力（容器内 root 默认有 NET_RAW，
+  `-sS/-sU` 照常）。要做 OS 探测/`--send-eth` 再 `--cap-add=NET_ADMIN`。
+- **抓包**同理，需要 `--cap-add=NET_RAW`（或 `--net=host`）。
+- 想用「步骤截图」就带 playwright 构建：`docker build --build-arg WITH_SHOTS=1 ...`
+  （多约 500MB，装 chromium）。
+- 镜像里的命令和本机一致，`docker run --rm ctf-ops:latest bash` 可以进去手搓；
+  也可以 `docker run --rm ctf-ops:latest doctor` 直接跑自检。
+
+导出成文件给别人：
+
+```bash
+./scripts/build-docker.sh              # 当前架构 → dist/ctf-ops-<arch>-<日期>.tar.gz
+./scripts/build-docker.sh linux/amd64  # 构建 x86 版（需 buildx + qemu）
+# 对方：docker load -i ctf-ops-amd64-20260101.tar.gz
+```
+
+x86 版也可以直接用 GitHub Actions 构建：仓库里 `.github/workflows/docker.yml`，
+手动触发（可选 tag、是否带 playwright），产物同时推到 GHCR 并留存 `tar.gz` 附件。
+
 ## Web 控制台
 
 `./ops dash` 起一个本地服务（默认只监听 `127.0.0.1:8899`），浏览器里完成全部动作：

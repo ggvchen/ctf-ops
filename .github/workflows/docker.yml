@@ -1,0 +1,111 @@
+name: docker
+
+# 构建 ctf-ops 镜像（amd64 + arm64），推到 GHCR 并留一份 tar.gz 产物
+#
+# 触发：
+#   - 手动：Actions → docker → Run workflow（可选 tag / 是否打包 playwright）
+#   - 打 v* 标签自动构建
+#
+# 产物位置：
+#   镜像  ghcr.io/<owner>/ctf-ops:<tag>        （amd64，默认）
+#         ghcr.io/<owner>/ctf-ops:<tag>-amd64
+#         ghcr.io/<owner>/ctf-ops:<tag>-arm64
+#   文件  Artifacts → ctf-ops-amd64 / ctf-ops-arm64（docker save 出来的 tar.gz）
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "镜像标签（默认 latest）"
+        required: false
+        default: latest
+      shots:
+        description: "打包 playwright/chromium？1=是（+500MB，步骤截图功能才可用）"
+        required: false
+        default: "0"
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build:
+    name: build-${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    # arm64 用的是 GitHub 的 arm 公测 runner；万一没有，别把整个流水线判失败
+    continue-on-error: ${{ matrix.arch == 'arm64' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    env:
+      TAG: ${{ inputs.tag || github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 环境信息
+        run: |
+          echo "arch=${{ matrix.arch }} tag=$TAG runner=${{ matrix.runner }}"
+          docker version --format '{{.Server.Version}} {{.Server.Arch}}'
+
+      - name: 登录 GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 构建
+        run: |
+          docker build -f docker/Dockerfile \
+            --build-arg "WITH_SHOTS=${{ inputs.shots || '0' }}" \
+            --build-arg "PIP_INDEX=https://pypi.tuna.tsinghua.edu.cn/simple" \
+            -t "ctf-ops:${{ matrix.arch }}" .
+
+      - name: 冒烟测试（镜像里工具与本项目是否都可用）
+        run: |
+          docker run --rm --entrypoint bash "ctf-ops:${{ matrix.arch }}" -lc '
+            set -x
+            ./ops --help >/dev/null
+            ./ops scan shell --help >/dev/null
+            nmap --version | head -1
+            tshark -v | head -1
+            nuclei -version
+            sqlmap --version | head -1
+            mysqldump --version
+            ./ops target list >/dev/null 2>&1 || true
+          '
+
+      - name: 打 tag 并推送
+        run: |
+          IMG=$(echo "ghcr.io/${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
+          docker tag "ctf-ops:${{ matrix.arch }}" "$IMG:${TAG}-${{ matrix.arch }}"
+          docker push "$IMG:${TAG}-${{ matrix.arch }}"
+          # amd64 额外占用不带后缀的 tag，方便直接 pulll
+          if [ "${{ matrix.arch }}" = "amd64" ]; then
+            docker tag "ctf-ops:${matrix.arch}" "$IMG:${TAG}"
+            docker push "$IMG:${TAG}"
+          fi
+
+      - name: 导出 tar.gz
+        run: |
+          mkdir -p dist
+          docker save "ctf-ops:${{ matrix.arch }}" | gzip -1 > "dist/ctf-ops-${TAG}-${{ matrix.arch }}.tar.gz"
+          ls -lh dist/
+
+      - name: 上传产物
+        uses: actions/upload-artifact@v4
+        # 公共仓库的 artifact 有配额，推不上也不影响 GHCR 里的镜像
+        continue-on-error: true
+        with:
+          name: ctf-ops-${{ matrix.arch }}
+          path: dist/*.tar.gz
+          retention-days: 7
+          compression-level: 0
