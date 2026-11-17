@@ -64,9 +64,9 @@ jobs:
 
       - name: 构建
         run: |
+          # runner 在海外，直接用官方 PyPI；国内构建时再传 PIP_INDEX 覆盖
           docker build -f docker/Dockerfile \
             --build-arg "WITH_SHOTS=${{ inputs.shots || '0' }}" \
-            --build-arg "PIP_INDEX=https://pypi.tuna.tsinghua.edu.cn/simple" \
             -t "ctf-ops:${{ matrix.arch }}" .
 
       - name: 冒烟测试（镜像里工具与本项目是否都可用）

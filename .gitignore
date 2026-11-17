@@ -23,3 +23,6 @@ ctfops/ctfops/
 # 现场取证产物（不进仓库）
 evidence/
 output/
+
+# 镜像导出包（几百 MB，不进仓库）
+dist/

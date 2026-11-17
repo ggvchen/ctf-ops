@@ -30,12 +30,12 @@ if [ -n "$PLATFORM" ]; then
     ${BUILD_ARGS[@]+"${BUILD_ARGS[@]}"} -t "$TAG" --load .
 else
   ARCH="$(docker version --format '{{.Server.Arch}}')"
-  echo "[*] 构建本机架构 linux/$ARCH → $TAG"
+  echo "[*] 构建本机架构 linux/${ARCH} → ${TAG}"
   docker build -f docker/Dockerfile ${BUILD_ARGS[@]+"${BUILD_ARGS[@]}"} -t "$TAG" .
 fi
 
 OUT="dist/ctf-ops-${ARCH}-${DATE}.tar.gz"
-echo "[*] 导出到 $OUT（稍等，镜像较大）"
+echo "[*] 导出到 ${OUT}（稍等，镜像较大）"
 docker save "$TAG" | gzip -1 > "$OUT"
 
 echo
